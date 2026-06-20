@@ -1,0 +1,3 @@
+- give feed/episode description to gemini
+- ping overcast
+- polling update, without breaking expiration

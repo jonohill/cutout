@@ -1,0 +1,48 @@
+# Smoke bench config. Copy to config.toml and fill in.
+#
+#   uv run python -m cutout.bench --config cutout/bench/config.toml --out cutout/bench-results/run1
+#
+# API keys are NEVER inlined here — give the *name* of an environment variable
+# in `api_key_env` and export it (or put it in cutout/.env and `set -a; source`).
+
+# A fixed corpus of episode audio files. Keep it stable so runs are comparable.
+audio_dir = "bench/audio"
+
+# Language the chapter descriptions are written in (matches CHAPTERS_LANGUAGE).
+language = "NZ English"
+
+# How many model calls to run concurrently per file.
+concurrency = 2
+
+# Transcription endpoint. Model-independent: each file is transcribed once and
+# the transcript.json is cached, then reused across every contender.
+[transcribe]
+url = "https://api.openai.com/v1/audio/transcriptions"
+model = "whisper-1"
+api_key_env = "TRANSCRIBE_API_KEY"
+# Upload size cap in decimal MB (matches the app's transcribe_max_mb). A source
+# over this is re-encoded to mono-Opus webm to fit, exactly as the worker does,
+# so the bench transcribes the same audio quality production would.
+max_mb = 25
+
+# One block per contender. `name` labels the output files and report rows;
+# `model` and `url` are the OpenAI-compatible endpoint. Pin exact model ids.
+
+[[models]]
+name = "gemini-flash"
+url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+model = "gemini-3.5-flash"
+api_key_env = "GEMINI_API_KEY"
+
+[[models]]
+name = "glm"
+url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+model = "glm-5.1"
+api_key_env = "GLM_API_KEY"
+
+# Largest model that might feasibly run on-device, via a local OpenAI-compatible
+# server (e.g. Ollama / llama.cpp). No api_key_env needed for a local endpoint.
+[[models]]
+name = "gemma-ondevice"
+url = "http://localhost:11434/v1/chat/completions"
+model = "gemma4:32b"

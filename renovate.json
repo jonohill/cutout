@@ -1,0 +1,32 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "enabledManagers": [
+    "dockerfile",
+    "custom.regex"
+  ],
+  "minimumReleaseAge": "2 weeks",
+  "internalChecksFilter": "strict",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Bump FFmpeg built from source in cutout/Dockerfile",
+      "fileMatch": ["(^|/)cutout/Dockerfile$"],
+      "matchStrings": ["ARG FFMPEG_VERSION=(?<currentValue>\\S+)"],
+      "depNameTemplate": "FFmpeg/FFmpeg",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^n(?<version>\\S+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Bump fdk-aac built from source in cutout/Dockerfile",
+      "fileMatch": ["(^|/)cutout/Dockerfile$"],
+      "matchStrings": ["ARG FDK_AAC_VERSION=(?<currentValue>\\S+)"],
+      "depNameTemplate": "mstorsjo/fdk-aac",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>\\S+)$"
+    }
+  ]
+}

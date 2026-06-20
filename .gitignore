@@ -1,0 +1,20 @@
+.DS_Store
+
+.venv/
+__pycache__/
+*.pyc
+.env*
+.pytest_cache/
+dist/
+*.egg-info/
+# Default local working directory (WORK_DIR) for in-flight media.
+work/
+
+models/
+s3-data/
+s3-meta/
+
+bench-results/
+bench/audio/
+bench/config.toml
+archive/

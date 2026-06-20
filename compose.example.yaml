@@ -1,0 +1,103 @@
+# Demo setup using whisper in a sidecar, gemini, local object storage.
+# Not prod ready! Consider a reverse proxy if auth is desired.
+
+services:
+  cutout:
+    # image: ghcr.io/jonohill/cutout:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Demo config, do not use in prod without review.
+      # See src/cutout/config.py for all options.
+      S3_ACCESS_KEY_ID: demo_key
+      S3_SECRET_ACCESS_KEY: demo_secret
+      PUBLIC_SERVICE_URL: http://localhost:8080
+      PUBLIC_STORAGE_URL: http://localhost:7070/cutout
+      WORK_DIR: /work
+      # Default INFO, or DEBUG, ERROR, WARNING, etc.
+      LOG_LEVEL: INFO
+      # For demo purposes. Default is 12.
+      MAX_EPISODES: 1
+      # Local sidecar. Works well for a prod setup too.
+      TRANSCRIBE_URL: http://whisper-batch:8000/v1/audio/transcriptions
+      # Gemini is a decent choice because of the free tier
+      # Needs a pretty decent LLM - small models tend not to adhere to output shape and/or hallucinate timestamps
+      CHAPTERS_URL: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+      CHAPTERS_API_KEY: ${GEMINI_API_KEY}
+      CHAPTERS_MODEL: gemini-3.5-flash
+      # Language for the generated chapter descriptions (default: NZ English)
+      CHAPTERS_LANGUAGE: NZ English
+      # Local sidecar, consider e.g. R2 for a prod setup
+      S3_ENDPOINT_URL: http://versitygw:7070
+      S3_REGION: us-east-1
+    volumes:
+      - ./work:/work
+    depends_on:
+      whisper-batch:
+        condition: service_healthy
+      versitygw:
+        condition: service_started
+      versitygw-init:
+        condition: service_completed_successfully
+
+  whisper-batch:
+    image: ghcr.io/jonohill/whisper-batch:13
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    volumes:
+      - ./models:/models
+    environment:
+      WHISPER_MODEL_NAME: base.en-q8_0
+
+  versitygw:
+    image: versity/versitygw:latest
+    restart: unless-stopped
+    ports:
+      - "7070:7070"
+    environment:
+      ROOT_ACCESS_KEY_ID: demo_key
+      ROOT_SECRET_ACCESS_KEY: demo_secret
+      VGW_REGION: us-east-1
+      VGW_BACKEND: posix
+      VGW_BACKEND_ARGS: /data
+      VGW_META_SIDECAR: /meta
+    volumes:
+      - ./s3-data:/data
+      - ./s3-meta:/meta
+
+  # One-shot to enable HTTP access to the bucket
+  versitygw-init:
+    image: amazon/aws-cli:latest
+    restart: "no"
+    depends_on:
+      versitygw:
+        condition: service_started
+    environment:
+      AWS_ACCESS_KEY_ID: demo_key
+      AWS_SECRET_ACCESS_KEY: demo_secret
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://versitygw:7070
+      BUCKET: cutout
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        until aws s3api list-buckets >/dev/null 2>&1; do
+          echo "waiting for versitygw..."; sleep 1;
+        done
+        aws s3api create-bucket --bucket "$$BUCKET" 2>/dev/null || true
+        aws s3api put-bucket-policy --bucket "$$BUCKET" --policy '{
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": "*",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::cutout/*"
+          }]
+        }'
+        echo "public-read policy applied to $$BUCKET"
