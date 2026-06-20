@@ -2,7 +2,6 @@
 name = "cutout"
 version = "0.1.0"
 description = "cutout"
-readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.110",
