@@ -1,11 +1,3 @@
-# --- ffmpeg build stage -----------------------------------------------------
-# Debian's packaged ffmpeg omits libfdk_aac (the highest-quality AAC encoder)
-# because the FDK licence is incompatible with redistributing a GPL ffmpeg
-# binary. We build our own here with --enable-nonfree so the encode stage gets
-# libfdk_aac; the result is fine for our own use but is not redistributable.
-# fdk-aac is linked statically (and libstdc++/libgcc with it), so the runtime
-# image needs no extra C++ libraries — only libopus, which the transcribe
-# stage's Opus re-encode uses.
 FROM debian:bookworm-slim AS ffmpeg-build
 
 RUN apt-get update \
@@ -57,7 +49,7 @@ COPY --from=ffmpeg-build /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
 COPY src ./src
 RUN pip install .
 
