@@ -183,9 +183,14 @@ def test_chapters_feeds_transcript_segments_to_the_model_and_stores_the_result(t
     ]
     seen = {}
 
-    async def generate(segments, *, url, model, api_key, language):
+    async def generate(segments, *, url, model, api_key, language, context=None):
         seen.update(
-            segments=segments, url=url, model=model, api_key=api_key, language=language
+            segments=segments,
+            url=url,
+            model=model,
+            api_key=api_key,
+            language=language,
+            context=context,
         )
         return chapters
 

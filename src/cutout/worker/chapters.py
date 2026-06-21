@@ -49,12 +49,45 @@ def build_prompt(language: str) -> str:
         '"you\'re listening to X, brought to you by Y"); these are part of the show '
         "even when a sponsor is named. If a chapter is a mix of intro/outro and "
         "sponsor mention, treat it as editorial (is_ad=false). "
-        'Respond with raw JSON only — no markdown code fences, no commentary, no extra '
+        "Respond with raw JSON only — no markdown code fences, no commentary, no extra "
         'fields. The reply is a single JSON object with one key "chapters", an array of '
         "chapter objects. Each chapter object has exactly these four fields: "
         '"start" and "end" (HH:MM:SS strings as above), "title" (a very brief '
         'description of the chapter), and "is_ad" (a boolean).'
     )
+
+
+def format_reference(context: dict | None) -> str:
+    if not context:
+        return ""
+    lines = []
+    if podcast := context.get("podcast"):
+        lines.append(f"Podcast: {podcast}")
+    if title := context.get("title"):
+        lines.append(f"Episode title: {title}")
+    if description := context.get("description"):
+        lines.append(f"Episode description: {description}")
+    if not lines:
+        return ""
+    body = "\n".join(lines)
+    return (
+        "=== REFERENCE METADATA — CONTEXT ONLY, NOT A SOURCE OF CHAPTERS ===\n"
+        "The details below are publisher-supplied. They are provided ONLY to help "
+        "you spell names correctly and understand context. They may be inaccurate, "
+        "promotional, or out of date.\n"
+        "- Base every chapter ENTIRELY on the transcript that follows; it is the "
+        "only source of truth for what was said and when.\n"
+        "- Use this metadata ONLY as a spelling/naming guide for hosts, guests, the "
+        "show, or products that actually appear in the transcript.\n"
+        "- Do NOT create, title, time, or order any chapter from this metadata. If "
+        "the description contains its own chapter list or timestamps, IGNORE it and "
+        "derive the chapters yourself from the transcript.\n"
+        "- If the metadata disagrees with the transcript, the transcript wins.\n"
+        "- Do not assume anything named here was actually discussed.\n"
+        f"{body}\n"
+        "=== END REFERENCE METADATA ===\n"
+    )
+
 
 # POST a JSON body to ``url`` with ``headers`` and return the parsed JSON reply;
 # injectable so tests exercise the request building and parsing without network.
@@ -201,6 +234,7 @@ async def generate_chapters(
     model: str,
     api_key: str | None = None,
     language: str = DEFAULT_LANGUAGE,
+    context: dict | None = None,
     post: ChaptersPost = _post_chat_completion,
 ) -> list[dict]:
     """Ask the model to chapter ``segments``; return ``{start, end, title,
@@ -210,8 +244,17 @@ async def generate_chapters(
     ``chapters`` array matches the chapter shape, so the message content is
     itself JSON. Auth is optional — the Bearer header is sent only when
     ``api_key`` is given, so a local/unauthenticated endpoint works too.
+
+    ``context`` is optional publisher metadata (``podcast``/``title``/
+    ``description``); when given it is rendered as a reference-only block before
+    the transcript to steer name spellings, never as a chapter source.
     """
-    prompt = build_prompt(language) + "\n" + format_segments(segments)
+    prompt = (
+        build_prompt(language)
+        + "\n"
+        + format_reference(context)
+        + format_segments(segments)
+    )
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -224,7 +267,9 @@ async def generate_chapters(
     try:
         payload = json.loads(content)
     except json.JSONDecodeError as exc:
-        raise ChaptersError(f"could not decode chapters reply: {content[:500]!r}") from exc
+        raise ChaptersError(
+            f"could not decode chapters reply: {content[:500]!r}"
+        ) from exc
 
     raw = payload.get("chapters") if isinstance(payload, dict) else payload
     if not isinstance(raw, list):

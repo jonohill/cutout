@@ -35,6 +35,49 @@ def test_parse_episodes_drops_items_without_enclosure():
     assert episodes[0].pub_date is not None
 
 
+CONTENT = "http://purl.org/rss/1.0/modules/content/"
+
+CONTEXT_FEED = f"""<?xml version='1.0'?>
+<rss xmlns:itunes="{ITUNES}" xmlns:content="{CONTENT}">
+  <channel>
+    <title>The Show &amp; Friends</title>
+    <item>
+      <title>Episode 7: Guests</title>
+      <guid>ep-7</guid>
+      <itunes:summary>Host &lt;b&gt;Renée&lt;/b&gt; chats with Tāmati.</itunes:summary>
+      <description>fallback should not win</description>
+      <enclosure url="https://src.example/7.mp3" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>"""
+
+
+def test_episode_context_extracts_and_cleans_metadata():
+    feed = feed_xml.parse_feed(CONTEXT_FEED)
+    episode = feed_xml.parse_episodes(feed)[0]
+    context = feed_xml.episode_context(feed, episode)
+    assert context["podcast"] == "The Show & Friends"
+    assert context["title"] == "Episode 7: Guests"
+    # itunes:summary wins over description; HTML stripped, diacritics preserved.
+    assert context["description"] == "Host Renée chats with Tāmati."
+
+
+def test_episode_description_truncates_long_copy():
+    long = "word " * 1000
+    item = ET.fromstring(f"<item><description>{long}</description></item>")
+    description = feed_xml.episode_description(item)
+    assert description is not None
+    assert len(description) <= feed_xml._MAX_DESCRIPTION_CHARS + 1  # plus ellipsis
+    assert description.endswith("…")
+
+
+def test_episode_context_omits_missing_fields():
+    feed = feed_xml.parse_feed(FEED)  # items here carry no title/description
+    episode = feed_xml.parse_episodes(feed)[0]
+    context = feed_xml.episode_context(feed, episode)
+    assert context == {"podcast": "Original"}
+
+
 def test_get_new_feed_url():
     feed = feed_xml.parse_feed(FEED)
     assert feed_xml.get_new_feed_url(feed) == "https://moved.example/feed.xml"

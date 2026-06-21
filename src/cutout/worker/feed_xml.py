@@ -6,7 +6,11 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from html.parser import HTMLParser
 
+# Descriptions can be very long (full show notes); we trim so they stay a light
+# context hint for the chapters model rather than rivalling the transcript.
+_MAX_DESCRIPTION_CHARS = 1500
 
 _PODCAST_NAMESPACES = {
     "itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd",
@@ -164,3 +168,91 @@ def _episode_guid(item: ET.Element, fallback: str | None) -> str | None:
     if guid_el is not None and guid_el.text:
         return guid_el.text.strip()
     return fallback
+
+
+class _TextExtractor(HTMLParser):
+    """Collect text content while dropping tags; entities are unescaped by the
+    parser (``convert_charrefs`` defaults on)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self._parts.append(data)
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
+
+
+def _clean_text(value: str | None) -> str | None:
+    """Collapse whitespace; return None for empty/whitespace-only input."""
+    if not value:
+        return None
+    text = " ".join(value.split())
+    return text or None
+
+
+def _strip_html(value: str) -> str | None:
+    """Plain text from a possibly-HTML string, whitespace collapsed."""
+    parser = _TextExtractor()
+    try:
+        parser.feed(value)
+        parser.close()
+    except Exception:
+        return _clean_text(value)
+    return _clean_text(parser.text)
+
+
+def channel_title(feed: Feed) -> str | None:
+    """The podcast's display name, or None."""
+    return _clean_text(feed.channel.findtext("title"))
+
+
+def episode_title(item: ET.Element) -> str | None:
+    """The episode title (preferring <title>, then <itunes:title>), or None."""
+    itunes_ns = _PODCAST_NAMESPACES["itunes"]
+    return _clean_text(
+        item.findtext("title") or item.findtext(f"{{{itunes_ns}}}title")
+    )
+
+
+def episode_description(item: ET.Element) -> str | None:
+    """Episode summary as length-bounded plain text, or None.
+
+    Prefers <itunes:summary>, then <description>, then <content:encoded> —
+    whichever is first present and non-empty. The copy is often HTML and
+    sometimes embeds its own chapter/timestamp list, so tags are stripped and
+    the result is truncated to keep it a context hint, not a rival chapter
+    source.
+    """
+    itunes_ns = _PODCAST_NAMESPACES["itunes"]
+    content_ns = _PODCAST_NAMESPACES["content"]
+    raw = (
+        item.findtext(f"{{{itunes_ns}}}summary")
+        or item.findtext("description")
+        or item.findtext(f"{{{content_ns}}}encoded")
+    )
+    if not raw:
+        return None
+    text = _strip_html(raw)
+    if not text:
+        return None
+    if len(text) > _MAX_DESCRIPTION_CHARS:
+        text = text[:_MAX_DESCRIPTION_CHARS].rstrip() + "…"
+    return text
+
+
+def episode_context(feed: Feed, episode: Episode) -> dict[str, str]:
+    """Reference metadata for the chapters model: podcast name, episode title,
+    and a trimmed description. Only non-empty fields are included; an empty dict
+    means there is nothing useful to pass on."""
+    context: dict[str, str] = {}
+    if podcast := channel_title(feed):
+        context["podcast"] = podcast
+    if title := episode_title(episode.item):
+        context["title"] = title
+    if description := episode_description(episode.item):
+        context["description"] = description
+    return context

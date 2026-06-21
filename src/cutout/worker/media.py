@@ -176,6 +176,7 @@ class MediaWorker:
             model=settings.chapters_model,
             api_key=settings.chapters_api_key,
             language=settings.chapters_language,
+            context=job.get("context"),
         )
 
         key = work_path(job["feed_id"], job["episode_id"], "chapters.json")

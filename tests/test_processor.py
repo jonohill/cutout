@@ -109,12 +109,14 @@ def test_process_reconciles_episodes():
         f"https://media.example/{audio_path(FEED_ID, ep1_id)}"
     )
 
-    # ep-2 missing audio -> media job enqueued + item dropped.
+    # ep-2 missing audio -> media job enqueued + item dropped. The podcast name
+    # rides along as reference context for the chapters model.
     assert media.messages == [
         {
             "feed_id": FEED_ID,
             "episode_id": ep2_id,
             "source_url": "https://src.example/2.mp3",
+            "context": {"podcast": "Show"},
         }
     ]
 

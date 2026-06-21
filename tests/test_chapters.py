@@ -53,6 +53,51 @@ def test_formats_transcript_targets_the_model_and_parses_the_reply():
     ]
 
 
+def test_reference_context_precedes_the_transcript_as_a_guide():
+    captured = {}
+
+    async def post(url, headers, body):
+        captured["body"] = body
+        return _reply('{"chapters":[]}')
+
+    asyncio.run(
+        generate_chapters(
+            SEGMENTS,
+            url=URL,
+            model="m",
+            api_key="k",
+            context={
+                "podcast": "The Show",
+                "title": "Episode 7",
+                "description": "A chat with Renée.",
+            },
+            post=post,
+        )
+    )
+
+    prompt = captured["body"]["messages"][0]["content"]
+    # The metadata is rendered, framed as context-only, and sits before the
+    # transcript lines.
+    assert "Podcast: The Show" in prompt
+    assert "Episode title: Episode 7" in prompt
+    assert "Episode description: A chat with Renée." in prompt
+    assert "NOT A SOURCE OF CHAPTERS" in prompt
+    assert prompt.index("REFERENCE METADATA") < prompt.index("Welcome to the show.")
+
+
+def test_no_context_leaves_the_prompt_metadata_free():
+    captured = {}
+
+    async def post(url, headers, body):
+        captured["body"] = body
+        return _reply('{"chapters":[]}')
+
+    asyncio.run(generate_chapters(SEGMENTS, url=URL, model="m", api_key="k", post=post))
+
+    prompt = captured["body"]["messages"][0]["content"]
+    assert "REFERENCE METADATA" not in prompt
+
+
 def test_drops_blank_segments_from_the_prompt():
     captured = {}
 

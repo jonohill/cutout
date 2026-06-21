@@ -146,7 +146,7 @@ class FeedProcessor:
                 continue
 
             if index < self._settings.max_episodes:
-                await self._start_pipeline(feed_id, episode_id, episode)
+                await self._start_pipeline(feed_id, episode_id, feed, episode)
                 queued += 1
             else:
                 dropped += 1
@@ -158,21 +158,27 @@ class FeedProcessor:
         )
 
     async def _start_pipeline(
-        self, feed_id: str, episode_id: str, episode: Episode
+        self, feed_id: str, episode_id: str, feed: Feed, episode: Episode
     ) -> None:
         """Hand the episode to the media pipeline.
 
         The pipeline takes the episode from ``source_url`` through to stored
         audio at ``audio_path(feed_id, episode_id)``; how it does that, and in
         what order, is the pipeline's concern, not ours.
+
+        Publisher metadata (podcast name, episode title, description) rides along
+        as ``context`` when present, to steer the chapters model's name
+        spellings; the key is omitted when there is nothing useful to pass.
         """
-        await self._start_job(
-            {
-                "feed_id": feed_id,
-                "episode_id": episode_id,
-                "source_url": episode.audio_url,
-            }
-        )
+        job = {
+            "feed_id": feed_id,
+            "episode_id": episode_id,
+            "source_url": episode.audio_url,
+        }
+        context = feed_xml.episode_context(feed, episode)
+        if context:
+            job["context"] = context
+        await self._start_job(job)
 
     async def _store_feed(
         self,
