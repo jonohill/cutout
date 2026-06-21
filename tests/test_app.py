@@ -151,11 +151,14 @@ def test_opml_export(opml_fakes):
     resp = client.get("/opml")
     assert resp.status_code == 200
     body = resp.text
-    assert 'xmlUrl="https://example.com/a.xml"' in body
+    # Subscriptions point at this server's feed, not the original source URL.
+    assert 'xmlUrl="http://localhost:8080/podcast/a"' in body
     assert 'text="Show A"' in body
-    # No title metadata or channel title -> falls back to the feed URL.
-    assert 'xmlUrl="https://example.com/b.xml"' in body
-    assert 'text="https://example.com/b.xml"' in body
+    # No channel title -> falls back to this server's feed URL.
+    assert 'xmlUrl="http://localhost:8080/podcast/b"' in body
+    assert 'text="http://localhost:8080/podcast/b"' in body
+    # The original source feed URL is not exported.
+    assert "example.com" not in body
 
 
 def test_opml_import_creates_missing(opml_fakes):

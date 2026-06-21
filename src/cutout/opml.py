@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from . import podcasts
 from .common import feed_path
 from .common.storage import Storage
+from .config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +61,15 @@ def parse_opml(xml_text: str) -> list[OpmlPodcast]:
     return entries
 
 
-async def export_opml(storage: Storage) -> str:
+async def export_opml(storage: Storage, settings: Settings) -> str:
     """Build an OPML document for every podcast stored in the bucket."""
+    public_base = settings.public_service_url.rstrip("/")
     entries: list[OpmlPodcast] = []
     for feed_id in await podcasts.list_feed_ids(storage):
-        feed_url = await podcasts.feed_source_url(storage, feed_id)
-        if not feed_url:
-            continue
         title = _channel_title(await storage.get_bytes(feed_path(feed_id)))
-        entries.append(OpmlPodcast(xml_url=feed_url, title=title))
+        entries.append(
+            OpmlPodcast(xml_url=f"{public_base}/podcast/{feed_id}", title=title)
+        )
     logger.info("opml export: %d podcast(s)", len(entries))
     return build_opml(entries)
 

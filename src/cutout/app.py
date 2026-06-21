@@ -82,7 +82,9 @@ def create_app(
     async def opml_export(request: Request) -> Response:
         if not request.app.state.settings.enable_opml:
             return Response(status_code=404)
-        document = await opml.export_opml(request.app.state.storage)
+        document = await opml.export_opml(
+            request.app.state.storage, request.app.state.settings
+        )
         return Response(content=document, media_type="text/x-opml")
 
     @app.post("/opml")
