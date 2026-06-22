@@ -19,3 +19,4 @@ bench/audio/
 bench/config.toml
 archive/
 todo*
+/*.md

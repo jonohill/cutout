@@ -14,8 +14,10 @@ _TIMEOUT = httpx.Timeout(30.0)
 _DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, read=300.0)
 
 # Transcription is slow: after the upload completes the server still has to run
-# the whole episode through the model before it replies, so allow a long read.
-_TRANSCRIBE_TIMEOUT = httpx.Timeout(30.0, read=900.0)
+# the whole episode through the model before it replies. A multi-hour episode on
+# a CPU model can take far longer than the old 15-minute window, so the read cap
+# is generous; the 30s connect timeout still catches a dead/unreachable service.
+_TRANSCRIBE_TIMEOUT = httpx.Timeout(30.0, read=7200.0)
 
 
 async def fetch_text(url: str) -> tuple[str, str]:
