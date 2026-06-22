@@ -96,6 +96,7 @@ def create_app(
                 request.app.state.storage,
                 request.app.state.queue,
                 await request.body(),
+                request.app.state.settings,
             )
         except ValueError:
             return PlainTextResponse("Bad Request", status_code=400)

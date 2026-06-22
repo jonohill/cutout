@@ -74,12 +74,14 @@ async def export_opml(storage: Storage, settings: Settings) -> str:
     return build_opml(entries)
 
 
-async def import_opml(storage: Storage, queue, body: bytes) -> int:
+async def import_opml(storage: Storage, queue, body: bytes, settings: Settings) -> int:
     """Create any podcast in ``body`` not already stored; return the count.
 
     Matches existing podcasts on their original feed URL and skips them (and
-    duplicate URLs within the document). Raises ``ValueError`` if the body is
-    not valid UTF-8 OPML.
+    duplicate URLs within the document). URLs pointing back at this server's
+    own ``/podcast/{feed_id}`` endpoint are skipped too, so re-importing a
+    document this server exported doesn't create self-referential feeds.
+    Raises ``ValueError`` if the body is not valid UTF-8 OPML.
     """
     try:
         text = body.decode("utf-8")
@@ -87,16 +89,42 @@ async def import_opml(storage: Storage, queue, body: bytes) -> int:
         raise ValueError("OPML body is not valid UTF-8") from exc
     entries = parse_opml(text)
 
+    self_prefix = f"{settings.public_service_url.rstrip('/')}/podcast/"
+    stored_ids = set(await podcasts.list_feed_ids(storage))
     seen = await podcasts.stored_feed_urls(storage)
     created = 0
+    skipped_self = 0
     for entry in entries:
         if entry.xml_url in seen:
+            continue
+        feed_id = _self_feed_id(entry.xml_url, self_prefix)
+        if feed_id is not None and feed_id in stored_ids:
+            skipped_self += 1
             continue
         seen.add(entry.xml_url)
         await podcasts.enqueue_create(queue, feed_url=entry.xml_url)
         created += 1
-    logger.info("opml import: %d new podcast(s) from %d entries", created, len(entries))
+    logger.info(
+        "opml import: %d new podcast(s) from %d entries (%d self-feed skipped)",
+        created,
+        len(entries),
+        skipped_self,
+    )
     return created
+
+
+def _self_feed_id(xml_url: str, self_prefix: str) -> str | None:
+    """The feed_id if ``xml_url`` is one of this server's own feeds, else None.
+
+    Only a bare ``{prefix}/podcast/{feed_id}`` is treated as a self-feed; a
+    URL with a deeper path is not one of ours.
+    """
+    if not xml_url.startswith(self_prefix):
+        return None
+    remainder = xml_url[len(self_prefix) :]
+    if not remainder or "/" in remainder:
+        return None
+    return remainder
 
 
 def _channel_title(raw: bytes | None) -> str | None:

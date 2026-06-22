@@ -195,6 +195,23 @@ def test_opml_import_dedupes_within_document(opml_fakes):
     assert len(queue.messages) == 1
 
 
+def test_opml_import_skips_own_feeds(opml_fakes):
+    # Re-importing a document this server exported must not create a
+    # self-referential feed for an already-stored podcast.
+    client, storage, queue = opml_fakes
+    storage.add_feed("a", "https://example.com/a.xml")
+    opml = """<opml version="2.0"><body>
+      <outline type="rss" xmlUrl="http://localhost:8080/podcast/a"/>
+      <outline type="rss" xmlUrl="http://localhost:8080/podcast/unknown"/>
+    </body></opml>"""
+
+    resp = client.post("/opml", content=opml.encode("utf-8"))
+    assert resp.status_code == 202
+    # Stored feed_id "a" is skipped; the unknown one is treated as a normal feed.
+    created = {msg["feed_url"] for msg in queue.messages}
+    assert created == {"http://localhost:8080/podcast/unknown"}
+
+
 def test_opml_import_rejects_bad_xml(opml_fakes):
     client, _, queue = opml_fakes
     resp = client.post("/opml", content=b"not xml <<<")
