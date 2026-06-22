@@ -1,11 +1,27 @@
 import asyncio
 import io
 
-from cutout.common.storage import LocalStorage
+from cutout.common.storage import LocalStorage, _decode_metadata_value
 
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def test_decode_metadata_value_unwraps_rfc2047_encoded_word():
+    # R2 returns non-ASCII user metadata as RFC 2047 encoded-words on head.
+    encoded = (
+        "=?utf-8?Q?https=3A=2F=2F?= =?utf-8?Q?cdn=2Eatp=2E?= "
+        "=?utf-8?Q?fm=2Frss?="
+    )
+    assert _decode_metadata_value(encoded) == "https://cdn.atp.fm/rss"
+    assert _decode_metadata_value("=?utf-8?Q?Caf=C3=A9?=") == "Café"
+
+
+def test_decode_metadata_value_passes_plain_ascii_through():
+    assert _decode_metadata_value("https://plain.example.com/feed") == (
+        "https://plain.example.com/feed"
+    )
 
 
 def test_put_bytes_get_head_roundtrip(tmp_path):

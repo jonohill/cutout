@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from collections.abc import AsyncIterator, Iterator
+from email.header import decode_header, make_header
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import BinaryIO, Protocol, runtime_checkable
@@ -16,6 +17,22 @@ from ..config import Settings
 
 # Error codes S3 implementations use for a missing object.
 _MISSING_CODES = {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}
+
+
+def _decode_metadata_value(value: str) -> str:
+    """Decode an RFC 2047 ``encoded-word`` metadata value back to plain text.
+
+    R2 stores any user-metadata value containing non-US-ASCII bytes as an
+    ``encoded-word`` (``=?utf-8?Q?...?=``) and returns it still encoded on
+    ``head_object``. Plain-ASCII values are unaffected, so this is a no-op for
+    them and only unwraps the ones R2 mangled.
+    """
+    if "=?" not in value:
+        return value
+    try:
+        return str(make_header(decode_header(value)))
+    except (ValueError, LookupError):
+        return value
 
 
 @runtime_checkable
@@ -97,8 +114,12 @@ class S3Storage:
             if exc.response.get("Error", {}).get("Code") in _MISSING_CODES:
                 return None
             raise
-        # S3 already lowercases user-metadata keys; normalise to be safe.
-        return {k.lower(): v for k, v in (resp.get("Metadata") or {}).items()}
+        # S3 already lowercases user-metadata keys; normalise to be safe, and
+        # undo any RFC 2047 encoding R2 applied to non-ASCII values.
+        return {
+            k.lower(): _decode_metadata_value(v)
+            for k, v in (resp.get("Metadata") or {}).items()
+        }
 
     async def list_keys(self, prefix: str) -> set[str]:
         return await run_in_threadpool(self._list_keys, prefix)
