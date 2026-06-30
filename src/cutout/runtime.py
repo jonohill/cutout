@@ -38,8 +38,10 @@ def create_full_app(settings: Settings | None = None) -> FastAPI:
 
     async def refresh_feed(job: dict) -> None:
         """Terminal pipeline action: re-run reconciliation now the episode's
-        audio exists, so the rewritten feed links to it."""
-        await feed_queue.put({"feed_id": job["feed_id"]})
+        audio exists, so the rewritten feed links to it.
+
+        ``notify`` means that new episodes were added to the feed."""
+        await feed_queue.put({"feed_id": job["feed_id"], "notify": True})
 
     pipeline = build_media_pipeline(
         storage=storage, work=work, settings=settings, on_complete=refresh_feed

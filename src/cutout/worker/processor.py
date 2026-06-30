@@ -13,7 +13,7 @@ from ..podcasts import META_FEED_URL as _META_FEED_URL
 from ..podcasts import META_TITLE as _META_TITLE
 from . import feed_xml
 from .feed_xml import Episode, Feed
-from .fetch import fetch_text
+from .fetch import fetch_text, ping_overcast
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,12 @@ class FeedProcessor:
             own_base=public_base,
         )
         await self._store_feed(feed_id, effective_url, title, delay, feed)
+        # Ping overcast if `notify`, i.e. if feed refresh is due to new episode
+        if body.get("notify") and self._settings.enable_overcast_ping:
+            await ping_overcast(
+                self._settings.overcast_ping_url,
+                f"{public_base}/podcast/{feed_id}",
+            )
 
     async def _resolve(self, body: dict) -> tuple[str, str, str | None, str | None]:
         feed_id = body.get("feed_id") or body.get("podcast_id")
@@ -154,7 +160,11 @@ class FeedProcessor:
 
         logger.info(
             "feed %s: %d episode(s) — %d present, %d queued, %d over-limit",
-            feed_id, len(episodes), present, queued, dropped,
+            feed_id,
+            len(episodes),
+            present,
+            queued,
+            dropped,
         )
 
     async def _start_pipeline(

@@ -153,6 +153,70 @@ def test_process_stores_title_metadata():
     assert feed.channel.find("title").text == "Renamed"
 
 
+def _ping_settings():
+    return Settings(
+        s3_access_key_id="x",
+        s3_secret_access_key="y",
+        public_service_url="https://app.example",
+        public_storage_url="https://media.example",
+        enable_overcast_ping=True,
+        overcast_ping_url="https://overcast.example/ping",
+    )
+
+
+def _run_with_recorded_ping(monkeypatch, settings, body):
+    """Run ``process(body)`` capturing any Overcast ping as (ping_url, feed_url)."""
+    calls: list[tuple[str, str]] = []
+
+    async def fake_ping(ping_url, feed_url):
+        calls.append((ping_url, feed_url))
+
+    monkeypatch.setattr("cutout.worker.processor.ping_overcast", fake_ping)
+
+    storage = FakeStorage()
+    storage.keys = {audio_path(FEED_ID, get_feed_id("ep-1"))}
+
+    async def fetch(url):
+        return PROC_FEED, url
+
+    processor = FeedProcessor(
+        storage=storage, start_job=FakeQueue().put, settings=settings, fetch=fetch
+    )
+    asyncio.run(processor.process(body))
+    return calls
+
+
+def test_publication_refresh_pings_overcast(monkeypatch):
+    calls = _run_with_recorded_ping(
+        monkeypatch,
+        _ping_settings(),
+        {"feed_id": FEED_ID, "feed_url": SOURCE_URL, "notify": True},
+    )
+    assert calls == [
+        ("https://overcast.example/ping", f"https://app.example/podcast/{FEED_ID}")
+    ]
+
+
+def test_plain_refresh_does_not_ping(monkeypatch):
+    # A feed GET enqueues a refresh with no ``notify`` flag; Overcast's own crawl
+    # must not be able to trigger a ping.
+    calls = _run_with_recorded_ping(
+        monkeypatch,
+        _ping_settings(),
+        {"feed_id": FEED_ID, "feed_url": SOURCE_URL},
+    )
+    assert calls == []
+
+
+def test_no_ping_when_disabled(monkeypatch):
+    calls = _run_with_recorded_ping(
+        monkeypatch,
+        _settings(),
+        {"feed_id": FEED_ID, "feed_url": SOURCE_URL, "notify": True},
+    )
+    assert calls == []
+
+
 def test_resolve_uses_stored_metadata():
     storage = FakeStorage()
     storage.head_meta[feed_path(FEED_ID)] = {

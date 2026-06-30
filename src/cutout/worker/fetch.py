@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(30.0)
 
@@ -27,6 +30,21 @@ async def fetch_text(url: str) -> tuple[str, str]:
         resp = await client.get(url)
         resp.raise_for_status()
         return resp.text, str(resp.url)
+
+
+async def ping_overcast(ping_url: str, feed_url: str) -> None:
+    """Nudge Overcast to re-crawl ``feed_url`` now (see overcast.fm/podcasterinfo).
+    Best effort.
+
+    ``feed_url`` is sent as the ``urlprefix`` parameter — the URL prefix Overcast
+    matches against subscribed feeds.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(ping_url, params={"urlprefix": feed_url})
+            resp.raise_for_status()
+    except Exception:
+        logger.warning("overcast ping failed for %s", feed_url, exc_info=True)
 
 
 async def stream_download(url: str) -> AsyncIterator[bytes]:

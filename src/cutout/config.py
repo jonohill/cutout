@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # authenticated reverse proxy
     enable_opml: bool = False
 
+    # Notify Overcast (https://overcast.fm/podcasterinfo) when a new episode
+    # is published. If ``public_storage_url`` is a CDN, give
+    # feed.xml a short cache TTL so Overcast's crawl sees the new episode.
+    enable_overcast_ping: bool = False
+    overcast_ping_url: str = "https://overcast.fm/ping"
+
     # Max number of episodes per feed to process
     max_episodes: int = Field(default=12, ge=1)
 
