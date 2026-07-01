@@ -3,8 +3,10 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .common.duration import parse_duration
 
 
 class Settings(BaseSettings):
@@ -53,6 +55,21 @@ class Settings(BaseSettings):
     # Max number of episodes per feed to process
     max_episodes: int = Field(default=12, ge=1)
 
+    # Periodic auto-refresh. Every ``auto_refresh_interval`` all feeds are
+    # refreshed as if their feed had been requested. A feed not requested within
+    # ``auto_refresh_ttl`` goes "stale" and is skipped by the sweep until it is
+    # requested again. systemd-style durations (s/m/h/d/w, M=month, y=year, plus
+    # long-form aliases like "min"/"hr"); "0" disables. interval="0" turns the
+    # sweep off entirely; ttl="0" means feeds never go stale.
+    auto_refresh_interval: str = "60m"
+    auto_refresh_ttl: str = "90d"
+
+    @field_validator("auto_refresh_interval", "auto_refresh_ttl")
+    @classmethod
+    def _validate_duration(cls, value: str) -> str:
+        parse_duration(value)
+        return value
+
     # Concurrency for fetching/parsing feeds
     feed_concurrency: int = Field(default=2, ge=1)
 
@@ -89,6 +106,14 @@ class Settings(BaseSettings):
     def transcribe_max_bytes(self) -> int:
         # Decimal MB to match API maths
         return self.transcribe_max_mb * 1000 * 1000
+
+    @property
+    def auto_refresh_interval_secs(self) -> int:
+        return parse_duration(self.auto_refresh_interval)
+
+    @property
+    def auto_refresh_ttl_secs(self) -> int:
+        return parse_duration(self.auto_refresh_ttl)
 
 
 @lru_cache

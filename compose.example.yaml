@@ -22,6 +22,12 @@ services:
       LOG_LEVEL: INFO
       # For demo purposes. Default is 12.
       MAX_EPISODES: 1
+      # Periodic refresh of every feed (systemd-style durations: s/m/h/d/w,
+      # M=month, y=year; "0" disables). A feed not fetched within
+      # AUTO_REFRESH_TTL goes stale and is skipped until requested again.
+      # Defaults: 60m / 90d.
+      AUTO_REFRESH_INTERVAL: 60m
+      AUTO_REFRESH_TTL: 90d
       # Local sidecar. Works well for a prod setup too.
       TRANSCRIBE_URL: http://whisper-batch:8000/v1/audio/transcriptions
       # Gemini is a decent choice because of the free tier

@@ -126,10 +126,11 @@ def test_process_reconciles_episodes():
     self_link = feed.channel.find(f"{{{ATOM}}}link")
     assert self_link.get("href") == f"https://app.example/podcast/{FEED_ID}"
 
-    # itunes:new-feed-url wins as the persisted source URL.
-    assert storage.metas[feed_path(FEED_ID)] == {
-        "feedurl": "https://moved.example/feed.xml"
-    }
+    # itunes:new-feed-url wins as the persisted source URL, and every store
+    # stamps a lastrequested timestamp.
+    meta = storage.metas[feed_path(FEED_ID)]
+    assert meta["feedurl"] == "https://moved.example/feed.xml"
+    assert "lastrequested" in meta
 
 
 def test_process_stores_title_metadata():
@@ -238,3 +239,58 @@ def test_resolve_unknown_feed_raises():
     )
     with pytest.raises(ValueError):
         asyncio.run(processor._resolve({"feed_id": "nope"}))
+
+
+def _run_process(body):
+    """Run ``process(body)`` and return the persisted feed metadata."""
+    storage = FakeStorage()
+    storage.keys = {audio_path(FEED_ID, get_feed_id("ep-1"))}
+
+    async def fetch(url):
+        return PROC_FEED, url
+
+    processor = FeedProcessor(
+        storage=storage, start_job=FakeQueue().put, settings=_settings(), fetch=fetch
+    )
+    asyncio.run(processor.process(body))
+    return storage.metas[feed_path(FEED_ID)]
+
+
+def test_requested_refresh_stamps_now():
+    meta = _run_process(
+        {"feed_id": FEED_ID, "feed_url": SOURCE_URL, "requested": True}
+    )
+    # A request-origin refresh writes a fresh, parseable timestamp.
+    from datetime import datetime
+
+    assert datetime.fromisoformat(meta["lastrequested"])
+
+
+def test_sweep_refresh_preserves_last_requested():
+    # A non-requested (sweep/notify) refresh carries the stored timestamp forward
+    # rather than resetting the staleness clock.
+    storage = FakeStorage()
+    storage.keys = {audio_path(FEED_ID, get_feed_id("ep-1"))}
+    stamped = "2020-01-01T00:00:00+00:00"
+    storage.head_meta[feed_path(FEED_ID)] = {
+        "feedurl": SOURCE_URL,
+        "lastrequested": stamped,
+    }
+
+    async def fetch(url):
+        return PROC_FEED, url
+
+    processor = FeedProcessor(
+        storage=storage, start_job=FakeQueue().put, settings=_settings(), fetch=fetch
+    )
+    asyncio.run(processor.process({"feed_id": FEED_ID}))
+    assert storage.metas[feed_path(FEED_ID)]["lastrequested"] == stamped
+
+
+def test_sweep_refresh_seeds_missing_last_requested():
+    # A feed created before this feature has no stored timestamp; a sweep refresh
+    # seeds one rather than leaving it blank (so it isn't instantly stale).
+    meta = _run_process({"feed_id": FEED_ID, "feed_url": SOURCE_URL})
+    from datetime import datetime
+
+    assert datetime.fromisoformat(meta["lastrequested"])

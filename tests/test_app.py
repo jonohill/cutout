@@ -88,7 +88,11 @@ def test_create_podcast(fakes):
     feed_id = resp.json()["feed_id"]
     assert feed_id
     assert queue.messages == [
-        {"feed_id": feed_id, "feed_url": "https://example.com/feed.xml"}
+        {
+            "feed_id": feed_id,
+            "feed_url": "https://example.com/feed.xml",
+            "requested": True,
+        }
     ]
 
 
@@ -127,7 +131,7 @@ def test_get_podcast_found(fakes):
     resp = client.get("/podcast/abc", follow_redirects=False)
     assert resp.status_code == 307
     assert resp.headers["location"] == "http://localhost:8080/abc/feed.xml"
-    assert queue.messages == [{"feed_id": "abc"}]
+    assert queue.messages == [{"feed_id": "abc", "requested": True}]
 
 
 def test_get_podcast_missing(fakes):

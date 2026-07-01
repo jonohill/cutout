@@ -10,7 +10,9 @@ from ..common.storage import Storage
 from ..config import Settings
 from ..podcasts import META_DELAY as _META_DELAY
 from ..podcasts import META_FEED_URL as _META_FEED_URL
+from ..podcasts import META_LAST_REQUESTED as _META_LAST_REQUESTED
 from ..podcasts import META_TITLE as _META_TITLE
+from ..podcasts import now_timestamp
 from . import feed_xml
 from .feed_xml import Episode, Feed
 from .fetch import fetch_text, ping_overcast
@@ -76,7 +78,12 @@ class FeedProcessor:
             announced=announced_url,
             own_base=public_base,
         )
-        await self._store_feed(feed_id, effective_url, title, delay, feed)
+        last_requested = await self._resolve_last_requested(
+            feed_id, requested=bool(body.get("requested"))
+        )
+        await self._store_feed(
+            feed_id, effective_url, title, delay, feed, last_requested
+        )
         # Ping overcast if `notify`, i.e. if feed refresh is due to new episode
         if body.get("notify") and self._settings.enable_overcast_ping:
             await ping_overcast(
@@ -116,6 +123,20 @@ class FeedProcessor:
             metadata.get(_META_TITLE),
             metadata.get(_META_DELAY),
         )
+
+    async def _resolve_last_requested(self, feed_id: str, *, requested: bool) -> str:
+        """The lastrequested timestamp to persist for this refresh.
+
+        A request-origin refresh (a fetch or create) stamps *now*. A refresh
+        driven by anything else — the periodic sweep, a pipeline-completion
+        notify — carries the stored value forward so it does not reset the feed's
+        staleness clock. A feed with no stored value yet (created before this
+        feature) is seeded with *now* so it isn't treated as instantly stale.
+        """
+        if requested:
+            return now_timestamp()
+        metadata = await self._storage.head(feed_path(feed_id))
+        return (metadata or {}).get(_META_LAST_REQUESTED) or now_timestamp()
 
     def _apply_delay(
         self, feed: Feed, episodes: list[Episode], delay: str
@@ -197,8 +218,12 @@ class FeedProcessor:
         title: str | None,
         delay: str | None,
         feed: Feed,
+        last_requested: str,
     ) -> None:
-        metadata: dict[str, str] = {_META_FEED_URL: feed_url}
+        metadata: dict[str, str] = {
+            _META_FEED_URL: feed_url,
+            _META_LAST_REQUESTED: last_requested,
+        }
         if title:
             metadata[_META_TITLE] = title
         if delay:

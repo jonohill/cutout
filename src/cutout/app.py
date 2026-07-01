@@ -73,7 +73,7 @@ def create_app(
         if await request.app.state.storage.head(key) is None:
             logger.info("podcast fetch: unknown feed_id=%s", feed_id)
             return Response(status_code=404)
-        await request.app.state.queue.put({"feed_id": feed_id})
+        await request.app.state.queue.put({"feed_id": feed_id, "requested": True})
         logger.info("podcast fetch: feed_id=%s; queued refresh", feed_id)
         audio_base = request.app.state.settings.public_storage_url.rstrip("/")
         return RedirectResponse(url=f"{audio_base}/{key}", status_code=307)

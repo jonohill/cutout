@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from cutout.common import get_feed_id, new_feed_id, parse_delay
+from cutout.common import get_feed_id, new_feed_id, parse_delay, parse_duration
 from cutout.common.paths import audio_path, feed_path
 
 
@@ -24,6 +24,39 @@ def test_parse_delay_valid(value, expected):
 def test_parse_delay_invalid(value):
     with pytest.raises(ValueError):
         parse_delay(value)
+
+
+@pytest.mark.parametrize(
+    "value, seconds",
+    [
+        ("60m", 3600),
+        ("60min", 3600),
+        ("90d", 90 * 86400),
+        ("36h", 36 * 3600),
+        ("2w", 14 * 86400),
+        ("1h30min", 5400),
+        ("2d 4h", 2 * 86400 + 4 * 3600),
+        ("1.5h", 5400),
+        ("45sec", 45),
+        ("1M", 2629800),  # capital M is months, not minutes
+        ("1y", 31557600),
+        ("0", 0),
+    ],
+)
+def test_parse_duration_valid(value, seconds):
+    assert parse_duration(value) == seconds
+
+
+def test_parse_duration_case_disambiguates_minutes_and_months():
+    # The whole point of the systemd grammar: lowercase m != capital M.
+    assert parse_duration("1m") == 60
+    assert parse_duration("1M") == 2629800
+
+
+@pytest.mark.parametrize("value", ["", "60", "m", "-1m", "1x", "1mm", "1 2m"])
+def test_parse_duration_invalid(value):
+    with pytest.raises(ValueError):
+        parse_duration(value)
 
 
 def test_get_feed_id_is_deterministic():
