@@ -56,7 +56,7 @@ def _pipeline(storage, calls, done, *, raise_at=None, reached=None):
 
         return handler
 
-    async def on_complete(job):
+    async def on_complete(job, last):
         calls.append("complete")
         done.set()
 
@@ -214,8 +214,54 @@ def test_in_flight_cleared_on_failure():
     asyncio.run(scenario())
 
 
+def test_on_complete_last_true_only_for_final_sibling():
+    """``on_complete`` is told ``last`` only when no other episode of the same
+    feed is still in flight, so a batch of new episodes yields a single "last"
+    completion (the one that clears the feed) rather than one per episode."""
+    completions: list[tuple[str, bool]] = []
+    done = asyncio.Event()
+
+    async def handler(job):
+        pass
+
+    async def on_complete(job, last):
+        completions.append((job["episode_id"], last))
+        if len(completions) == 3:
+            done.set()
+
+    # Single-stage pipeline so completion order is the drain order.
+    stages = [
+        Stage("only", handler, lambda j: f"src/{j['feed_id']}/{j['episode_id']}",
+              FakeStorage())
+    ]
+    pipeline = Pipeline(stages, on_complete=on_complete, job_key=_job_key)
+
+    async def scenario():
+        # Enqueue the whole batch before draining — this is how reconciliation
+        # queues a feed's new episodes (synchronously, before any completes).
+        for ep in ("e1", "e2", "e3"):
+            await pipeline.start({"feed_id": "f", "episode_id": ep, "source_url": "u"})
+        # A different feed's episode is in flight the whole time; it must not
+        # keep feed "f" from ever seeing its own last completion.
+        await pipeline.start({"feed_id": "g", "episode_id": "x", "source_url": "u"})
+        tasks = pipeline.spawn()
+        try:
+            await asyncio.wait_for(done.wait(), 1.0)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+    feed_f = [last for ep, last in completions if ep in ("e1", "e2", "e3")]
+    # Exactly one of feed f's three episodes is flagged last, and it is the one
+    # that completed last.
+    assert feed_f == [False, False, True]
+
+
 def test_build_uses_fair_queue():
-    async def noop(job):
+    async def noop(job, last):
         pass
 
     pipeline = build_media_pipeline(
@@ -233,7 +279,7 @@ def test_fair_pipeline_interleaves_two_podcasts():
     async def record(job):
         order.append(job["feed_id"])
 
-    async def noop(job):
+    async def noop(job, last):
         pass
 
     stages = [

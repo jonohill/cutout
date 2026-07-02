@@ -38,12 +38,15 @@ def create_full_app(settings: Settings | None = None) -> FastAPI:
 
     feed_queue: asyncio.Queue = asyncio.Queue()
 
-    async def refresh_feed(job: dict) -> None:
+    async def refresh_feed(job: dict, last: bool) -> None:
         """Terminal pipeline action: re-run reconciliation now the episode's
         audio exists, so the rewritten feed links to it.
 
-        ``notify`` means that new episodes were added to the feed."""
-        await feed_queue.put({"feed_id": job["feed_id"], "notify": True})
+        ``notify`` gates the Overcast ping. It is set only on ``last`` — the
+        episode that completes a batch of new episodes — so a feed is pinged
+        once per batch rather than once per episode (Overcast rate-limits pings
+        per feed)."""
+        await feed_queue.put({"feed_id": job["feed_id"], "notify": last})
 
     pipeline = build_media_pipeline(
         storage=storage, work=work, settings=settings, on_complete=refresh_feed

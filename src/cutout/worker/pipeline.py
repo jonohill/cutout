@@ -40,7 +40,9 @@ logger = logging.getLogger(__name__)
 OutputKey = Callable[[dict], str]
 
 # Called once a job clears the final stage (e.g. to re-run feed reconciliation).
-OnComplete = Callable[[dict], Awaitable[None]]
+# ``last`` is True when no other episode of the same feed is still in flight —
+# i.e. this completes a batch of new episodes.
+OnComplete = Callable[[dict, bool], Awaitable[None]]
 
 QueueFactory = Callable[[], Any]
 
@@ -141,8 +143,18 @@ class Pipeline:
             if next_stage is not None:
                 await self._queues[next_stage].put(job)
             else:
-                await self._on_complete(job)
-                self._in_flight.discard(self._job_key(job))
+                # Drop this episode from in-flight *before* checking whether any
+                # sibling remains, so the check is atomic: if two of a feed's
+                # episodes finish back-to-back, exactly the last-to-clear sees an
+                # empty remainder. (Check first and both could see the other
+                # still in-flight, so neither would be "last".)
+                key = self._job_key(job)
+                self._in_flight.discard(key)
+                feed_prefix = f"{job['feed_id']}/"
+                last = not any(
+                    k.startswith(feed_prefix) for k in self._in_flight
+                )
+                await self._on_complete(job, last)
 
         return run
 
@@ -241,11 +253,11 @@ def build_media_pipeline(
         ),
     ]
 
-    async def finish(job: dict) -> None:
+    async def finish(job: dict, last: bool) -> None:
         # The served audio is now in remote storage. Refresh the feed so it
         # links to it, then drop the episode's local working files — they have
         # done their job and the remote audio is the durable result.
-        await on_complete(job)
+        await on_complete(job, last)
         await work.cleanup(_episode_prefix(job))
 
     return Pipeline(
