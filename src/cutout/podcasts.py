@@ -79,6 +79,19 @@ async def list_feed_ids(storage: Storage) -> list[str]:
     )
 
 
+async def delete_feed(storage: Storage, feed_id: str) -> int:
+    """Remove a podcast and every object under it, returning the count deleted.
+
+    A feed's rewritten ``feed.xml``, its episode audio and any in-flight remote
+    artifacts all share the ``{feed_id}/`` prefix, so listing that prefix and
+    deleting each key drops the whole podcast. Returns 0 for an unknown feed_id.
+    """
+    keys = sorted(await storage.list_keys(f"{feed_id}/"))
+    for key in keys:
+        await storage.delete(key)
+    return len(keys)
+
+
 async def feed_source_url(storage: Storage, feed_id: str) -> str | None:
     """The original feed URL a podcast was created from, or None if unknown."""
     metadata = await storage.head(feed_path(feed_id))

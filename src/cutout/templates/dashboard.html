@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>cutout dashboard</title>
+        <script
+            src="https://cdnjs.cloudflare.com/ajax/libs/htmx/2.0.10/htmx.min.js"
+            integrity="sha512-mwXO+qVbheglD8l/LGeVBnqcKl9NtchGWmM9gW/gvAEZBYnsBQCpaneQ+hI+MOlv7Komhd1NqZ5Gv1ElbYgqCA=="
+            crossorigin="anonymous"
+            referrerpolicy="no-referrer"
+        ></script>
+        <style>
+            :root {
+                color-scheme: light dark;
+            }
+            body {
+                font-family: system-ui, sans-serif;
+                max-width: 60rem;
+                margin: 2rem auto;
+                padding: 0 1rem;
+                line-height: 1.4;
+            }
+            h1 {
+                margin-bottom: 0;
+            }
+            section {
+                margin-top: 2rem;
+            }
+            form {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+                align-items: center;
+            }
+            input[type="url"],
+            input[type="text"] {
+                flex: 1 1 12rem;
+                padding: 0.4rem;
+            }
+            button {
+                padding: 0.4rem 0.8rem;
+                cursor: pointer;
+            }
+            button.danger {
+                color: #b00;
+                font-size: 1.1rem;
+                line-height: 1;
+                font-weight: bold;
+                padding: 0.2rem 0.5rem;
+                background: none;
+                border: none;
+            }
+            button.danger:hover {
+                color: #fff;
+                background: #b00;
+                border-radius: 4px;
+            }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                margin-top: 0.5rem;
+            }
+            th,
+            td {
+                text-align: left;
+                padding: 0.4rem 0.6rem;
+                border-bottom: 1px solid #8884;
+            }
+            th.num,
+            td.num {
+                text-align: right;
+            }
+            td form {
+                display: inline;
+            }
+            .stats {
+                color: #888;
+            }
+            .notice {
+                padding: 0.5rem 0.75rem;
+                background: #4a90d922;
+                border-radius: 4px;
+            }
+            .empty {
+                color: #888;
+                font-style: italic;
+            }
+            .hint {
+                color: #888;
+                font-size: 0.85rem;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>cutout</h1>
+
+        <section>
+            <h2>Add a podcast</h2>
+            <form
+                hx-post="/dashboard/podcast"
+                hx-target="#feeds"
+                hx-swap="outerHTML"
+                hx-on::after-request="if (event.detail.successful) this.reset()"
+            >
+                <input
+                    type="url"
+                    name="feed_url"
+                    placeholder="https://example.com/feed.xml"
+                    required
+                />
+                <input
+                    type="text"
+                    name="title"
+                    placeholder="Title (optional)"
+                />
+                <input
+                    type="text"
+                    name="delay"
+                    placeholder="Delay, e.g. 2d (optional)"
+                />
+                <button type="submit">Add</button>
+            </form>
+        </section>
+
+        <section>
+            <h2>OPML</h2>
+            <form
+                hx-post="/dashboard/opml"
+                hx-encoding="multipart/form-data"
+                hx-target="#feeds"
+                hx-swap="outerHTML"
+                hx-on::after-request="if (event.detail.successful) this.reset()"
+            >
+                <input
+                    type="file"
+                    name="file"
+                    accept=".opml,.xml,text/x-opml,application/xml"
+                    required
+                />
+                <button type="submit">Import</button>
+                <a href="/dashboard/opml">Export OPML</a>
+            </form>
+            <p class="hint">
+                Imported feeds are queued and appear below once processed.
+            </p>
+        </section>
+
+        <section>
+            <h2>Podcasts</h2>
+            {% include "_feeds.html" %}
+        </section>
+    </body>
+</html>

@@ -51,6 +51,10 @@ class Storage(Protocol):
         """Return every object key under ``prefix``."""
         ...
 
+    async def delete(self, key: str) -> None:
+        """Delete the object at ``key``; a no-op if it does not exist."""
+        ...
+
     async def put(
         self,
         key: str,
@@ -138,6 +142,13 @@ class S3Storage:
                 break
             token = resp.get("NextContinuationToken")
         return keys
+
+    async def delete(self, key: str) -> None:
+        await run_in_threadpool(self._delete, key)
+
+    def _delete(self, key: str) -> None:
+        # delete_object is idempotent — deleting a missing key is not an error.
+        self._client.delete_object(Bucket=self._bucket, Key=key)
 
     async def put(
         self,
@@ -281,6 +292,12 @@ class LocalStorage:
         else:
             out.close()
             await run_in_threadpool(os.replace, tmp, path)
+
+    async def delete(self, key: str) -> None:
+        await run_in_threadpool(self._delete, key)
+
+    def _delete(self, key: str) -> None:
+        self.path(key).unlink(missing_ok=True)
 
     async def list_keys(self, prefix: str) -> set[str]:
         return await run_in_threadpool(self._list_keys, prefix)

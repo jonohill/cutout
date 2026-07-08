@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # authenticated reverse proxy
     enable_opml: bool = False
 
+    # Expose the /dashboard UI: view every stored podcast plus basic stats and
+    # add/remove them individually or via OPML. Like /opml this exposes and
+    # mutates _all_ podcasts, so only enable it behind an authenticated reverse
+    # proxy.
+    enable_dashboard: bool = False
+
     # Notify Overcast (https://overcast.fm/podcasterinfo) when a new episode
     # is published. If ``public_storage_url`` is a CDN, give
     # feed.xml a short cache TTL so Overcast's crawl sees the new episode.

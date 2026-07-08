@@ -22,6 +22,10 @@ class FakeStorage:
     async def list_keys(self, prefix: str) -> set[str]:
         return {key for key in self.objects if key.startswith(prefix)}
 
+    async def delete(self, key: str) -> None:
+        self.objects.pop(key, None)
+        self.metadata.pop(key, None)
+
     async def put_bytes(
         self,
         key: str,
@@ -35,13 +39,26 @@ class FakeStorage:
             self.metadata[key] = {k.lower(): v for k, v in metadata.items()}
 
     def add_feed(
-        self, feed_id: str, feed_url: str, *, title: str | None = None
+        self,
+        feed_id: str,
+        feed_url: str,
+        *,
+        title: str | None = None,
+        episodes: int = 0,
+        delay: str | None = None,
+        last_requested: str | None = None,
     ) -> None:
         channel = f"<title>{title}</title>" if title else ""
+        channel += "<item></item>" * episodes
         self.objects[feed_path(feed_id)] = (
             f"<rss><channel>{channel}</channel></rss>".encode("utf-8")
         )
-        self.metadata[feed_path(feed_id)] = {"feedurl": feed_url}
+        metadata = {"feedurl": feed_url}
+        if delay is not None:
+            metadata["delay"] = delay
+        if last_requested is not None:
+            metadata["lastrequested"] = last_requested
+        self.metadata[feed_path(feed_id)] = metadata
 
 
 class FakeQueue:
@@ -74,6 +91,13 @@ def opml_fakes():
     storage = FakeStorage()
     queue = FakeQueue()
     return _make_client(storage, queue, enable_opml=True), storage, queue
+
+
+@pytest.fixture
+def dashboard_fakes():
+    storage = FakeStorage()
+    queue = FakeQueue()
+    return _make_client(storage, queue, enable_dashboard=True), storage, queue
 
 
 def test_healthz(fakes):
@@ -222,3 +246,82 @@ def test_opml_import_rejects_bad_xml(opml_fakes):
     assert resp.status_code == 400
     assert resp.text == "Bad Request"
     assert queue.messages == []
+
+
+def test_dashboard_disabled_returns_404(fakes):
+    client, _, _ = fakes
+    assert client.get("/dashboard").status_code == 404
+    assert client.post("/dashboard/podcast", data={"feed_url": "x"}).status_code == 404
+    assert client.post("/dashboard/podcast/abc/delete").status_code == 404
+    assert client.get("/dashboard/opml").status_code == 404
+
+
+def test_dashboard_lists_feeds_with_stats(dashboard_fakes):
+    client, storage, _ = dashboard_fakes
+    storage.add_feed("a", "https://example.com/a.xml", title="Show A", episodes=3)
+    storage.add_feed("b", "https://example.com/b.xml", title="Show B", episodes=1)
+
+    resp = client.get("/dashboard")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Show A" in body and "Show B" in body
+    # Totals roll up across feeds.
+    assert "2</strong> podcasts" in body
+    assert "4</strong> episodes" in body
+
+
+def test_dashboard_add_enqueues_and_returns_partial(dashboard_fakes):
+    client, _, queue = dashboard_fakes
+    resp = client.post(
+        "/dashboard/podcast",
+        data={"feed_url": "https://example.com/new.xml", "delay": "2d"},
+    )
+    assert resp.status_code == 200
+    # HTMX swaps the #feeds partial back in.
+    assert 'id="feeds"' in resp.text
+    assert queue.messages[0]["feed_url"] == "https://example.com/new.xml"
+    assert queue.messages[0]["delay"] == "2d"
+
+
+def test_dashboard_add_rejects_bad_input_without_enqueue(dashboard_fakes):
+    client, _, queue = dashboard_fakes
+    resp = client.post("/dashboard/podcast", data={"feed_url": "not-a-url"})
+    assert resp.status_code == 200
+    assert "Invalid" in resp.text
+    assert queue.messages == []
+
+
+def test_dashboard_delete_removes_all_feed_objects(dashboard_fakes):
+    client, storage, _ = dashboard_fakes
+    storage.add_feed("gone", "https://example.com/gone.xml", title="Gone")
+    storage.objects["gone/ep1.m4a"] = b"audio"
+    storage.objects["keep/feed.xml"] = b"<rss></rss>"
+
+    resp = client.post("/dashboard/podcast/gone/delete")
+    assert resp.status_code == 200
+    # Every object under the feed prefix is gone; other feeds are untouched.
+    assert not any(key.startswith("gone/") for key in storage.objects)
+    assert "keep/feed.xml" in storage.objects
+
+
+def test_dashboard_opml_import_and_export(dashboard_fakes):
+    client, storage, queue = dashboard_fakes
+    storage.add_feed("a", "https://example.com/a.xml", title="Show A")
+
+    export = client.get("/dashboard/opml")
+    assert export.status_code == 200
+    assert export.headers["content-disposition"] == "attachment; filename=cutout.opml"
+    assert 'xmlUrl="http://localhost:8080/podcast/a"' in export.text
+
+    opml_doc = (
+        '<opml version="2.0"><body>'
+        '<outline type="rss" xmlUrl="https://example.com/new.xml"/>'
+        "</body></opml>"
+    )
+    resp = client.post(
+        "/dashboard/opml",
+        files={"file": ("subs.opml", opml_doc, "text/x-opml")},
+    )
+    assert resp.status_code == 200
+    assert 'id="feeds"' in resp.text
+    assert queue.messages[0]["feed_url"] == "https://example.com/new.xml"

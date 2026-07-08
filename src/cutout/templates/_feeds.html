@@ -1,0 +1,52 @@
+<div id="feeds">
+  {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+  <p class="stats">
+    <strong>{{ data.total_feeds }}</strong> podcast{{ "" if data.total_feeds == 1 else "s" }}
+    &middot;
+    <strong>{{ data.total_episodes }}</strong> episode{{ "" if data.total_episodes == 1 else "s" }}
+  </p>
+  {% if data.feeds %}
+  <table>
+    <thead>
+      <tr>
+        <th>Podcast</th>
+        <th class="num">Episodes</th>
+        <th>Delay</th>
+        <th>Last requested</th>
+        <th>Source</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for feed in data.feeds %}
+      <tr>
+        <td>
+          <a href="{{ feed.cutout_url }}"
+             title="cutout feed URL — subscribe with this (right-click to copy)">{{ feed.display_title }}</a>
+        </td>
+        <td class="num">{{ feed.episode_count }}</td>
+        <td>{{ feed.delay or "—" }}</td>
+        <td>{{ feed.last_requested_display or "—" }}</td>
+        <td>
+          {% if feed.source_url %}
+          <a href="{{ feed.source_url }}" rel="noreferrer">feed</a>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          <form method="post"
+                action="/dashboard/podcast/{{ feed.feed_id }}/delete"
+                hx-post="/dashboard/podcast/{{ feed.feed_id }}/delete"
+                hx-target="#feeds"
+                hx-swap="outerHTML"
+                hx-confirm="Remove {{ feed.display_title }}? This deletes its stored audio too.">
+            <button type="submit" class="danger" title="Remove" aria-label="Remove {{ feed.display_title }}">&times;</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No podcasts yet. Add one above.</p>
+  {% endif %}
+</div>
