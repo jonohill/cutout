@@ -28,6 +28,11 @@ services:
       # Defaults: 60m / 90d.
       AUTO_REFRESH_INTERVAL: 60m
       AUTO_REFRESH_TTL: 90d
+      # Time-based cleanup, run after each refresh: episode audio older than
+      # CLEANUP_TTL (by feed pubDate) is deleted, along with any stored file that
+      # no longer maps to a feed episode. Same
+      # duration format; "0" (default) disables it.
+      CLEANUP_TTL: "0"
       # Local sidecar. Works well for a prod setup too.
       TRANSCRIBE_URL: http://whisper-batch:8000/v1/audio/transcriptions
       # Gemini is a decent choice because of the free tier

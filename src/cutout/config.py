@@ -70,7 +70,13 @@ class Settings(BaseSettings):
     auto_refresh_interval: str = "60m"
     auto_refresh_ttl: str = "90d"
 
-    @field_validator("auto_refresh_interval", "auto_refresh_ttl")
+    # Time-based cleanup of stored episode files, run after each feed refresh.
+    # Audio for episodes older than ``cleanup_ttl`` (by their feed ``pubDate``)
+    # is deleted, as is any stored file that no longer maps to an episode in the
+    # feed. systemd-style duration; "0" (default) disables it.
+    cleanup_ttl: str = "0"
+
+    @field_validator("auto_refresh_interval", "auto_refresh_ttl", "cleanup_ttl")
     @classmethod
     def _validate_duration(cls, value: str) -> str:
         parse_duration(value)
@@ -120,6 +126,10 @@ class Settings(BaseSettings):
     @property
     def auto_refresh_ttl_secs(self) -> int:
         return parse_duration(self.auto_refresh_ttl)
+
+    @property
+    def cleanup_ttl_secs(self) -> int:
+        return parse_duration(self.cleanup_ttl)
 
 
 @lru_cache

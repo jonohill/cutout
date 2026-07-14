@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 from urllib.parse import urlsplit
 
@@ -67,7 +67,12 @@ class FeedProcessor:
         episodes = feed_xml.parse_episodes(feed)
         if delay:
             episodes = self._apply_delay(feed, episodes, delay)
+        cleanup_secs = self._settings.cleanup_ttl_secs
+        if cleanup_secs > 0:
+            episodes = self._apply_retention(feed, episodes, cleanup_secs, delay)
         await self._reconcile_episodes(feed_id, feed, episodes)
+        if cleanup_secs > 0:
+            await self._cleanup_files(feed_id, episodes)
         public_base = self._settings.public_service_url.rstrip("/")
         feed_xml.rewrite_channel_links(feed, f"{public_base}/podcast/{feed_id}")
         if title:
@@ -155,6 +160,51 @@ class FeedProcessor:
             else:
                 kept.append(episode)
         return kept
+
+    def _apply_retention(
+        self, feed: Feed, episodes: list[Episode], ttl_secs: int, delay: str | None
+    ) -> list[Episode]:
+        """Remove episodes older than the retention window from ``feed``, return the rest.
+
+        The mirror of :meth:`_apply_delay`: an episode past the retention window
+        is dropped from the feed so it is neither advertised nor reprocessed, and
+        its stored audio is later removed by :meth:`_cleanup_files`. Episodes
+        without a parsable ``pub_date`` are kept, matching :meth:`_apply_delay`.
+
+        A ``delay`` shifts each episode's effective publication into our feed by
+        that much (see :meth:`_apply_delay`), so the retention window is measured
+        from ``pub_date + delay``, not ``pub_date``.
+        """
+        window = timedelta(seconds=ttl_secs)
+        if delay:
+            window += parse_delay(delay)
+        cutoff = datetime.now(timezone.utc) - window
+        kept: list[Episode] = []
+        for episode in episodes:
+            if episode.pub_date is not None and episode.pub_date < cutoff:
+                feed.remove_item(episode.item)
+            else:
+                kept.append(episode)
+        return kept
+
+    async def _cleanup_files(self, feed_id: str, episodes: list[Episode]) -> None:
+        """Delete stored files that no longer belong to the feed.
+
+        ``episodes`` is the post-retention set of episodes the feed keeps, so any
+        object under ``{feed_id}/`` that is neither the feed XML nor the audio of
+        one of those episodes is stale — episodes aged out by ``cleanup_ttl`` or
+        dropped from the source feed — and is removed. The feed XML is preserved.
+        """
+        keep = {audio_path(feed_id, get_feed_id(ep.guid)) for ep in episodes}
+        feed_key = feed_path(feed_id)
+        removed = 0
+        for key in await self._storage.list_keys(f"{feed_id}/"):
+            if key == feed_key or key in keep:
+                continue
+            await self._storage.delete(key)
+            removed += 1
+        if removed:
+            logger.info("feed %s: cleaned up %d stale file(s)", feed_id, removed)
 
     async def _reconcile_episodes(
         self, feed_id: str, feed: Feed, episodes: list[Episode]

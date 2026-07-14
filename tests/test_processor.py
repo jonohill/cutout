@@ -1,5 +1,6 @@
 import asyncio
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -54,6 +55,10 @@ class FakeStorage:
     async def put_bytes(self, key, data, *, content_type=None, metadata=None):
         self.objects[key] = data
         self.metas[key] = metadata or {}
+
+    async def delete(self, key):
+        self.objects.pop(key, None)
+        self.keys.discard(key)
 
 
 class FakeQueue:
@@ -131,6 +136,158 @@ def test_process_reconciles_episodes():
     meta = storage.metas[feed_path(FEED_ID)]
     assert meta["feedurl"] == "https://moved.example/feed.xml"
     assert "lastrequested" in meta
+
+
+def _cleanup_settings(cleanup_ttl):
+    return Settings(
+        s3_access_key_id="x",
+        s3_secret_access_key="y",
+        public_service_url="https://app.example",
+        public_storage_url="https://media.example",
+        cleanup_ttl=cleanup_ttl,
+    )
+
+
+def _dated_feed():
+    """A two-episode feed with one old and one recent episode."""
+    from email.utils import format_datetime
+
+    old = format_datetime(datetime.now(timezone.utc) - timedelta(days=400))
+    recent = format_datetime(datetime.now(timezone.utc) - timedelta(days=1))
+    return f"""<?xml version='1.0'?>
+<rss xmlns:itunes="{ITUNES}" xmlns:atom="{ATOM}">
+  <channel>
+    <title>Show</title>
+    <item>
+      <guid>old-ep</guid>
+      <pubDate>{old}</pubDate>
+      <enclosure url="https://src.example/old.mp3" type="audio/mpeg"/>
+    </item>
+    <item>
+      <guid>new-ep</guid>
+      <pubDate>{recent}</pubDate>
+      <enclosure url="https://src.example/new.mp3" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>"""
+
+
+def _run_cleanup(cleanup_ttl):
+    """Process ``_dated_feed`` with both episodes stored plus an orphan file.
+
+    Returns (storage, feed_items_by_guid).
+    """
+    storage = FakeStorage()
+    old_key = audio_path(FEED_ID, get_feed_id("old-ep"))
+    new_key = audio_path(FEED_ID, get_feed_id("new-ep"))
+    orphan_key = f"{FEED_ID}/orphan-no-episode"
+    # Both episodes have stored audio, plus a stray file from an episode that has
+    # since dropped off the feed, plus the feed's own XML object.
+    storage.keys = {feed_path(FEED_ID), old_key, new_key, orphan_key}
+    for key in storage.keys:
+        storage.objects[key] = b"data"
+
+    feed_xml_body = _dated_feed()
+
+    async def fetch(url):
+        return feed_xml_body, url
+
+    processor = FeedProcessor(
+        storage=storage,
+        start_job=FakeQueue().put,
+        settings=_cleanup_settings(cleanup_ttl),
+        fetch=fetch,
+    )
+    asyncio.run(processor.process({"feed_id": FEED_ID, "feed_url": SOURCE_URL}))
+    items = _items_by_guid(storage.objects[feed_path(FEED_ID)])
+    return storage, items
+
+
+def test_cleanup_removes_old_and_orphaned_files():
+    storage, items = _run_cleanup("90d")
+
+    old_key = audio_path(FEED_ID, get_feed_id("old-ep"))
+    new_key = audio_path(FEED_ID, get_feed_id("new-ep"))
+    orphan_key = f"{FEED_ID}/orphan-no-episode"
+
+    # Aged-out and unmappable files are gone; recent episode audio and the feed
+    # XML itself are preserved.
+    assert storage.keys == {feed_path(FEED_ID), new_key}
+    assert old_key not in storage.objects
+    assert orphan_key not in storage.objects
+    assert new_key in storage.objects
+
+    # The old episode is also dropped from the published feed; the recent one stays.
+    assert set(items) == {"new-ep"}
+
+
+def _feed_with_dates(guids_to_ages):
+    """Build a feed whose items carry the given guid -> age-in-days pubDates."""
+    from email.utils import format_datetime
+
+    items = ""
+    for guid, days in guids_to_ages.items():
+        pub = format_datetime(datetime.now(timezone.utc) - timedelta(days=days))
+        items += f"""
+    <item>
+      <guid>{guid}</guid>
+      <pubDate>{pub}</pubDate>
+      <enclosure url="https://src.example/{guid}.mp3" type="audio/mpeg"/>
+    </item>"""
+    return f"""<?xml version='1.0'?>
+<rss xmlns:itunes="{ITUNES}" xmlns:atom="{ATOM}">
+  <channel>
+    <title>Show</title>{items}
+  </channel>
+</rss>"""
+
+
+def test_cleanup_ttl_accounts_for_delay():
+    # delay=7d shifts each episode's effective appearance in our feed forward by
+    # a week, so the 5d retention window must be measured from pub_date + delay.
+    # "recent" (8d old) has only been live ~1d, so it must survive; "stale" (20d
+    # old) has been live ~13d and must be purged. Without the delay offset the 8d
+    # episode would be wrongly deleted the moment it cleared the delay window.
+    storage = FakeStorage()
+    recent_key = audio_path(FEED_ID, get_feed_id("recent"))
+    stale_key = audio_path(FEED_ID, get_feed_id("stale"))
+    storage.keys = {feed_path(FEED_ID), recent_key, stale_key}
+    for key in storage.keys:
+        storage.objects[key] = b"data"
+
+    feed_xml_body = _feed_with_dates({"recent": 8, "stale": 20})
+
+    async def fetch(url):
+        return feed_xml_body, url
+
+    processor = FeedProcessor(
+        storage=storage,
+        start_job=FakeQueue().put,
+        settings=_cleanup_settings("5d"),
+        fetch=fetch,
+    )
+    asyncio.run(
+        processor.process(
+            {"feed_id": FEED_ID, "feed_url": SOURCE_URL, "delay": "7d"}
+        )
+    )
+
+    items = _items_by_guid(storage.objects[feed_path(FEED_ID)])
+    assert storage.keys == {feed_path(FEED_ID), recent_key}
+    assert stale_key not in storage.objects
+    assert set(items) == {"recent"}
+
+
+def test_cleanup_disabled_keeps_everything():
+    storage, items = _run_cleanup("0")
+
+    old_key = audio_path(FEED_ID, get_feed_id("old-ep"))
+    orphan_key = f"{FEED_ID}/orphan-no-episode"
+
+    # With cleanup off nothing is deleted and no episode is aged out of the feed.
+    assert old_key in storage.objects
+    assert orphan_key in storage.objects
+    assert set(items) == {"old-ep", "new-ep"}
 
 
 def test_process_stores_title_metadata():
