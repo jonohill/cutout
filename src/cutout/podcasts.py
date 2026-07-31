@@ -23,10 +23,13 @@ META_DELAY = "delay"
 # created), distinct from when it was last refreshed. The auto-refresh sweep
 # uses it to decide staleness; only request-origin refreshes bump it.
 META_LAST_REQUESTED = "lastrequested"
+# ISO 8601 UTC timestamp of the last refresh that ran to completion. Written
+# only on success
+META_LAST_REFRESHED = "lastrefreshed"
 
 
 def now_timestamp() -> str:
-    """Current time as an ISO 8601 UTC string, for the lastrequested metadata."""
+    """Current time as an ISO 8601 UTC string, for the feed's metadata timestamps."""
     return datetime.now(timezone.utc).isoformat()
 
 

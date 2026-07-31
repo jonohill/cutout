@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 
@@ -83,13 +83,17 @@ def parse_episodes(feed: Feed) -> list[Episode]:
 
 
 def _pub_date(item: ET.Element) -> datetime | None:
+    """The item's <pubDate> as a timezone-aware datetime, or None."""
     el = item.find("pubDate")
     if el is None or not el.text:
         return None
     try:
-        return parsedate_to_datetime(el.text.strip())
+        parsed = parsedate_to_datetime(el.text.strip())
     except (TypeError, ValueError):
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def set_audio_url(episode: Episode, new_url: str) -> None:

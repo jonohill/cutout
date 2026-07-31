@@ -1,5 +1,6 @@
 import asyncio
 import io
+from datetime import datetime, timezone
 
 from cutout.common.storage import LocalStorage, _decode_metadata_value
 
@@ -35,6 +36,21 @@ def test_put_bytes_get_head_roundtrip(tmp_path):
     assert _run(store.head("f/e.x")) == {}
     # Written through to a real nested file under the root.
     assert (tmp_path / "f" / "e.x").read_bytes() == b"hi"
+
+
+def test_last_modified_reports_an_aware_write_time(tmp_path):
+    store = LocalStorage(tmp_path)
+    assert _run(store.last_modified("f/e.x")) is None
+
+    before = datetime.now(timezone.utc)
+    _run(store.put_bytes("f/e.x", b"hi"))
+    written = _run(store.last_modified("f/e.x"))
+
+    assert written is not None
+    # Aware, so callers can compare it against now() without guarding — the
+    # whole point of it standing in for a refresh timestamp.
+    assert written.utcoffset() is not None
+    assert abs((written - before).total_seconds()) < 60
 
 
 def test_put_streams_body_to_disk(tmp_path):

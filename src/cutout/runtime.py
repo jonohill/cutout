@@ -71,17 +71,21 @@ def create_full_app(settings: Settings | None = None) -> FastAPI:
         while True:
             await asyncio.sleep(interval)
             try:
-                refreshed = skipped = 0
+                queued = skipped = 0
                 for feed_id in await list_feed_ids(storage):
                     metadata = await storage.head(feed_path(feed_id)) or {}
                     if is_stale(metadata.get(META_LAST_REQUESTED), ttl):
                         skipped += 1
                         continue
                     await feed_queue.put({"feed_id": feed_id})
-                    refreshed += 1
+                    queued += 1
+                # "queued", not "refreshed": this loop only enqueues, and the
+                # drainers process the messages afterwards. Whether a refresh
+                # actually succeeded shows up as the feed's lastrefreshed
+                # advancing, which the dashboard reports.
                 logger.info(
-                    "auto-refresh sweep: %d refreshed, %d stale-skipped",
-                    refreshed,
+                    "auto-refresh sweep: %d queued, %d stale-skipped",
+                    queued,
                     skipped,
                 )
             except Exception:

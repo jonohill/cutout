@@ -4,6 +4,10 @@
     <strong>{{ data.total_feeds }}</strong> podcast{{ "" if data.total_feeds == 1 else "s" }}
     &middot;
     <strong>{{ data.total_episodes }}</strong> episode{{ "" if data.total_episodes == 1 else "s" }}
+    {% if data.failing_feeds %}
+    &middot;
+    <strong class="failing">{{ data.failing_feeds }}</strong> failing to refresh
+    {% endif %}
   </p>
   {% if data.feeds %}
   <table>
@@ -13,6 +17,7 @@
         <th class="num">Episodes</th>
         <th>Delay</th>
         <th>Last requested</th>
+        <th>Last refreshed</th>
         <th>Source</th>
         <th></th>
       </tr>
@@ -27,6 +32,19 @@
         <td class="num">{{ feed.episode_count }}</td>
         <td>{{ feed.delay or "—" }}</td>
         <td>{{ feed.last_requested_display or "—" }}</td>
+        <td>
+          {% if feed.unhealthy %}
+          <span class="failing"
+                title="No successful refresh since then — every attempt is failing. Check the worker log for this feed.">
+            ⚠ {{ feed.last_refreshed_display }}
+          </span>
+          {% elif feed.stale %}
+          <span class="paused"
+                title="Not requested recently, so the auto-refresh sweep is skipping it. Fetching the feed resumes refreshes.">
+            paused
+          </span>
+          {% else %}{{ feed.last_refreshed_display or "—" }}{% endif %}
+        </td>
         <td>
           {% if feed.source_url %}
           <a href="{{ feed.source_url }}" rel="noreferrer">feed</a>

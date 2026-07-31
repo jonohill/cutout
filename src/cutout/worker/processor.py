@@ -10,6 +10,7 @@ from ..common.storage import Storage
 from ..config import Settings
 from ..podcasts import META_DELAY as _META_DELAY
 from ..podcasts import META_FEED_URL as _META_FEED_URL
+from ..podcasts import META_LAST_REFRESHED as _META_LAST_REFRESHED
 from ..podcasts import META_LAST_REQUESTED as _META_LAST_REQUESTED
 from ..podcasts import META_TITLE as _META_TITLE
 from ..podcasts import now_timestamp
@@ -42,6 +43,20 @@ def _pick_source_url(
     return current
 
 
+def _partition(
+    episodes: list[Episode], drop: Callable[[datetime], bool]
+) -> tuple[list[Episode], list[Episode]]:
+    """Split ``episodes`` into (kept, dropped) by ``drop(pub_date)``."""
+    kept: list[Episode] = []
+    dropped: list[Episode] = []
+    for episode in episodes:
+        target = (
+            dropped if episode.pub_date is not None and drop(episode.pub_date) else kept
+        )
+        target.append(episode)
+    return kept, dropped
+
+
 class FeedProcessor:
     """Owns the per-message workflow. One instance is fine for all messages."""
 
@@ -67,12 +82,24 @@ class FeedProcessor:
         episodes = feed_xml.parse_episodes(feed)
         if delay:
             episodes = self._apply_delay(feed, episodes, delay)
+        # Pruning is best effort
         cleanup_secs = self._settings.cleanup_ttl_secs
-        if cleanup_secs > 0:
-            episodes = self._apply_retention(feed, episodes, cleanup_secs, delay)
+        pruning = cleanup_secs > 0
+        if pruning:
+            try:
+                episodes = self._apply_retention(feed, episodes, cleanup_secs, delay)
+            except Exception:
+                # Leaves ``episodes`` as the full set, so the cleanup below
+                # would delete nothing it should keep — but it would also be
+                # working from an unpruned list, so skip it entirely.
+                logger.exception("feed %s: retention failed, skipping cleanup", feed_id)
+                pruning = False
         await self._reconcile_episodes(feed_id, feed, episodes)
-        if cleanup_secs > 0:
-            await self._cleanup_files(feed_id, episodes)
+        if pruning:
+            try:
+                await self._cleanup_files(feed_id, episodes)
+            except Exception:
+                logger.exception("feed %s: cleanup failed, files left in place", feed_id)
         public_base = self._settings.public_service_url.rstrip("/")
         feed_xml.rewrite_channel_links(feed, f"{public_base}/podcast/{feed_id}")
         if title:
@@ -153,12 +180,9 @@ class FeedProcessor:
         ``pub_date`` are kept.
         """
         cutoff = datetime.now(timezone.utc) - parse_delay(delay)
-        kept: list[Episode] = []
-        for episode in episodes:
-            if episode.pub_date is not None and episode.pub_date >= cutoff:
-                feed.remove_item(episode.item)
-            else:
-                kept.append(episode)
+        kept, dropped = _partition(episodes, lambda pub: pub >= cutoff)
+        for episode in dropped:
+            feed.remove_item(episode.item)
         return kept
 
     def _apply_retention(
@@ -179,12 +203,9 @@ class FeedProcessor:
         if delay:
             window += parse_delay(delay)
         cutoff = datetime.now(timezone.utc) - window
-        kept: list[Episode] = []
-        for episode in episodes:
-            if episode.pub_date is not None and episode.pub_date < cutoff:
-                feed.remove_item(episode.item)
-            else:
-                kept.append(episode)
+        kept, dropped = _partition(episodes, lambda pub: pub < cutoff)
+        for episode in dropped:
+            feed.remove_item(episode.item)
         return kept
 
     async def _cleanup_files(self, feed_id: str, episodes: list[Episode]) -> None:
@@ -270,9 +291,12 @@ class FeedProcessor:
         feed: Feed,
         last_requested: str,
     ) -> None:
+        # This write is the last step of a refresh, so stamping lastrefreshed
+        # here means it advances only when the whole thing succeeded.
         metadata: dict[str, str] = {
             _META_FEED_URL: feed_url,
             _META_LAST_REQUESTED: last_requested,
+            _META_LAST_REFRESHED: now_timestamp(),
         }
         if title:
             metadata[_META_TITLE] = title

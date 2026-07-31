@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 
 from cutout.worker import feed_xml
 
@@ -33,6 +34,38 @@ def test_parse_episodes_drops_items_without_enclosure():
     assert len(feed.channel.findall("item")) == 1
     assert episodes[0].audio_url == "https://src.example/1.mp3"
     assert episodes[0].pub_date is not None
+
+
+def _pub_date_for(raw):
+    item = ET.fromstring(f"<item><pubDate>{raw}</pubDate></item>")
+    return feed_xml._pub_date(item)
+
+
+def test_pub_date_is_always_timezone_aware():
+    # "-0000" means "local zone unknown" in RFC 2822, and parsedate_to_datetime
+    # returns a naive datetime for it — which would blow up the retention and
+    # delay comparisons against an aware now(). Megaphone and Art19 use it
+    # universally, so this is the common case, not an edge case.
+    for raw in (
+        "Fri, 11 Jul 2025 02:00:00 -0000",
+        "Tue, 22 Jul 2025 09:00:00 +0000",
+        "Tue, 22 Jul 2025 09:00:00 PDT",
+        "Tue, 22 Jul 2025 09:00:00 +1200",
+    ):
+        parsed = _pub_date_for(raw)
+        assert parsed is not None, raw
+        assert parsed.utcoffset() is not None, raw
+
+    # An unknown zone is read as UTC, not shifted.
+    assert _pub_date_for("Fri, 11 Jul 2025 02:00:00 -0000") == datetime(
+        2025, 7, 11, 2, 0, tzinfo=timezone.utc
+    )
+
+
+def test_pub_date_returns_none_for_unparsable_dates():
+    assert _pub_date_for("not a date at all") is None
+    assert _pub_date_for("") is None
+    assert feed_xml._pub_date(ET.fromstring("<item/>")) is None
 
 
 CONTENT = "http://purl.org/rss/1.0/modules/content/"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from collections.abc import AsyncIterator, Iterator
+from datetime import datetime, timezone
 from email.header import decode_header, make_header
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
@@ -45,6 +46,10 @@ class Storage(Protocol):
 
     async def head(self, key: str) -> dict[str, str] | None:
         """Return the object's user metadata (lowercased keys), or ``None``."""
+        ...
+
+    async def last_modified(self, key: str) -> datetime | None:
+        """When the object at ``key`` was last written, or ``None`` if absent."""
         ...
 
     async def list_keys(self, prefix: str) -> set[str]:
@@ -124,6 +129,19 @@ class S3Storage:
             k.lower(): _decode_metadata_value(v)
             for k, v in (resp.get("Metadata") or {}).items()
         }
+
+    async def last_modified(self, key: str) -> datetime | None:
+        return await run_in_threadpool(self._last_modified, key)
+
+    def _last_modified(self, key: str) -> datetime | None:
+        try:
+            resp = self._client.head_object(Bucket=self._bucket, Key=key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in _MISSING_CODES:
+                return None
+            raise
+        # boto3 parses LastModified into an aware datetime.
+        return resp.get("LastModified")
 
     async def list_keys(self, prefix: str) -> set[str]:
         return await run_in_threadpool(self._list_keys, prefix)
@@ -232,6 +250,12 @@ class LocalStorage:
     async def head(self, key: str) -> dict[str, str] | None:
         # No metadata to carry locally; an empty dict just signals "present".
         return {} if self.path(key).is_file() else None
+
+    async def last_modified(self, key: str) -> datetime | None:
+        path = self.path(key)
+        if not path.is_file():
+            return None
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
 
     async def get_bytes(self, key: str) -> bytes | None:
         return await run_in_threadpool(self._get_bytes, key)

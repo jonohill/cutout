@@ -278,6 +278,136 @@ def test_cleanup_ttl_accounts_for_delay():
     assert set(items) == {"recent"}
 
 
+def test_unknown_zone_pub_dates_are_handled():
+    # Megaphone and Art19 stamp every <pubDate> with a "-0000" offset, which
+    # parses to a naive datetime. Both the delay and the retention filter
+    # compare pub_date against an aware now(), so a naive value used to raise
+    # TypeError and abort the whole refresh — leaving the feed XML unwritten and
+    # the feed's storage never swept.
+    storage = FakeStorage()
+    recent_key = audio_path(FEED_ID, get_feed_id("recent"))
+    stale_key = audio_path(FEED_ID, get_feed_id("stale"))
+    storage.keys = {feed_path(FEED_ID), recent_key, stale_key}
+    for key in storage.keys:
+        storage.objects[key] = b"data"
+
+    # delayed: inside the 7d delay window. recent: live ~1d. stale: live ~13d,
+    # past the 5d retention window.
+    feed_xml_body = _feed_with_dates(
+        {"delayed": 2, "recent": 8, "stale": 20}
+    ).replace("+0000", "-0000")
+    assert "-0000" in feed_xml_body
+
+    async def fetch(url):
+        return feed_xml_body, url
+
+    processor = FeedProcessor(
+        storage=storage,
+        start_job=FakeQueue().put,
+        settings=_cleanup_settings("5d"),
+        fetch=fetch,
+    )
+    asyncio.run(
+        processor.process({"feed_id": FEED_ID, "feed_url": SOURCE_URL, "delay": "7d"})
+    )
+
+    # The refresh completes: feed XML republished, aged-out audio actually swept.
+    items = _items_by_guid(storage.objects[feed_path(FEED_ID)])
+    assert set(items) == {"recent"}
+    assert storage.keys == {feed_path(FEED_ID), recent_key}
+    assert stale_key not in storage.objects
+
+
+def _process_with_broken(method, cleanup_ttl="90d", delay=None):
+    """Run a refresh whose ``method`` raises; return the storage afterwards."""
+    storage = FakeStorage()
+    old_key = audio_path(FEED_ID, get_feed_id("old-ep"))
+    new_key = audio_path(FEED_ID, get_feed_id("new-ep"))
+    storage.keys = {feed_path(FEED_ID), old_key, new_key}
+    for key in storage.keys:
+        storage.objects[key] = b"data"
+
+    feed_xml_body = _dated_feed()
+
+    async def fetch(url):
+        return feed_xml_body, url
+
+    processor = FeedProcessor(
+        storage=storage,
+        start_job=FakeQueue().put,
+        settings=_cleanup_settings(cleanup_ttl),
+        fetch=fetch,
+    )
+
+    def boom(*args, **kwargs):
+        raise RuntimeError(f"{method} exploded")
+
+    setattr(processor, method, boom)
+    body = {"feed_id": FEED_ID, "feed_url": SOURCE_URL}
+    if delay:
+        body["delay"] = delay
+    asyncio.run(processor.process(body))
+    return storage
+
+
+def test_retention_failure_still_publishes_the_feed():
+    # Pruning is housekeeping; publishing is the job. A retention failure must
+    # cost storage, not freeze the feed — the 13-day outage in reverse.
+    storage = _process_with_broken("_apply_retention")
+
+    items = _items_by_guid(storage.objects[feed_path(FEED_ID)])
+    # The feed was rewritten and still lists both episodes (nothing was pruned).
+    assert set(items) == {"old-ep", "new-ep"}
+    # Cleanup is skipped rather than run off an unpruned list, so no audio is
+    # deleted — the leak this trades for staying published.
+    assert storage.keys == {
+        feed_path(FEED_ID),
+        audio_path(FEED_ID, get_feed_id("old-ep")),
+        audio_path(FEED_ID, get_feed_id("new-ep")),
+    }
+    # lastrefreshed still advances: the refresh genuinely did its job.
+    assert storage.metas[feed_path(FEED_ID)]["lastrefreshed"]
+
+
+def test_cleanup_failure_still_publishes_the_feed():
+    storage = _process_with_broken("_cleanup_files")
+
+    items = _items_by_guid(storage.objects[feed_path(FEED_ID)])
+    # Retention ran, so the aged-out episode is gone from the XML even though
+    # deleting its audio failed.
+    assert set(items) == {"new-ep"}
+    assert storage.metas[feed_path(FEED_ID)]["lastrefreshed"]
+
+
+def test_delay_failure_aborts_the_refresh():
+    # The one filter that must stay fatal: publishing without the delay applied
+    # would expose episodes the subscriber chose to withhold.
+    with pytest.raises(RuntimeError):
+        _process_with_broken("_apply_delay", delay="7d")
+
+
+def test_retention_failure_leaves_the_feed_unmodified():
+    # Decisions are made before any removal, so a filter that raises partway
+    # cannot leave the channel half-pruned and desynced from ``episodes`` —
+    # which would make _reconcile_episodes remove an already-removed item.
+    feed = feed_xml.parse_feed(_feed_with_dates({"a": 1, "b": 400, "c": 800}))
+    episodes = feed_xml.parse_episodes(feed)
+    processor = FeedProcessor(
+        storage=FakeStorage(),
+        start_job=FakeQueue().put,
+        settings=_cleanup_settings("30d"),
+    )
+    for episode in episodes:
+        if episode.guid == "c":
+            episode.pub_date = "not a datetime"  # raises mid-partition
+
+    with pytest.raises(TypeError):
+        processor._apply_retention(feed, episodes, 30 * 86400, None)
+
+    # Nothing removed: 'b' was past the window but the raise came after it.
+    assert len(feed.channel.findall("item")) == 3
+
+
 def test_cleanup_disabled_keeps_everything():
     storage, items = _run_cleanup("0")
 
@@ -451,3 +581,28 @@ def test_sweep_refresh_seeds_missing_last_requested():
     from datetime import datetime
 
     assert datetime.fromisoformat(meta["lastrequested"])
+
+
+def test_successful_refresh_stamps_last_refreshed():
+    # Unlike lastrequested, this advances on *every* completed refresh, sweep or
+    # not — it is the dashboard's liveness signal.
+    meta = _run_process({"feed_id": FEED_ID, "feed_url": SOURCE_URL})
+    assert datetime.fromisoformat(meta["lastrefreshed"])
+
+
+def test_failed_refresh_leaves_last_refreshed_untouched():
+    # The whole point of the signal: a refresh that dies partway must not stamp,
+    # so a crash-looping feed's timestamp visibly stops advancing.
+    storage = FakeStorage()
+    storage.keys = {audio_path(FEED_ID, get_feed_id("ep-1"))}
+
+    async def fetch(url):
+        raise RuntimeError("source feed unreachable")
+
+    processor = FeedProcessor(
+        storage=storage, start_job=FakeQueue().put, settings=_settings(), fetch=fetch
+    )
+    with pytest.raises(RuntimeError):
+        asyncio.run(processor.process({"feed_id": FEED_ID, "feed_url": SOURCE_URL}))
+
+    assert feed_path(FEED_ID) not in storage.metas

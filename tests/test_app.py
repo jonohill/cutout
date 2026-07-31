@@ -1,6 +1,10 @@
+import asyncio
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
+from cutout import dashboard
 from cutout.app import create_app
 from cutout.config import Settings
 from cutout.common.paths import feed_path
@@ -10,6 +14,7 @@ class FakeStorage:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.metadata: dict[str, dict[str, str]] = {}
+        self.written: dict[str, datetime] = {}
 
     async def get_bytes(self, key: str) -> bytes | None:
         return self.objects.get(key)
@@ -18,6 +23,11 @@ class FakeStorage:
         if key not in self.objects:
             return None
         return self.metadata.get(key, {})
+
+    async def last_modified(self, key: str) -> datetime | None:
+        if key not in self.objects:
+            return None
+        return self.written.get(key, datetime.now(timezone.utc))
 
     async def list_keys(self, prefix: str) -> set[str]:
         return {key for key in self.objects if key.startswith(prefix)}
@@ -47,6 +57,8 @@ class FakeStorage:
         episodes: int = 0,
         delay: str | None = None,
         last_requested: str | None = None,
+        last_refreshed: str | None = None,
+        written: datetime | None = None,
     ) -> None:
         channel = f"<title>{title}</title>" if title else ""
         channel += "<item></item>" * episodes
@@ -58,6 +70,10 @@ class FakeStorage:
             metadata["delay"] = delay
         if last_requested is not None:
             metadata["lastrequested"] = last_requested
+        if last_refreshed is not None:
+            metadata["lastrefreshed"] = last_refreshed
+        if written is not None:
+            self.written[feed_path(feed_id)] = written
         self.metadata[feed_path(feed_id)] = metadata
 
 
@@ -268,6 +284,118 @@ def test_dashboard_lists_feeds_with_stats(dashboard_fakes):
     # Totals roll up across feeds.
     assert "2</strong> podcasts" in body
     assert "4</strong> episodes" in body
+
+
+def _dt(**kwargs):
+    return datetime.now(timezone.utc) - timedelta(**kwargs)
+
+
+def _ago(**kwargs):
+    return _dt(**kwargs).isoformat()
+
+
+def test_dashboard_flags_feeds_that_stopped_refreshing():
+    # lastrefreshed only advances on a completed refresh, so a feed the hourly
+    # sweep keeps enqueueing whose timestamp is days old is failing every
+    # attempt
+    storage = FakeStorage()
+    storage.add_feed(
+        "broken", "https://example.com/a.xml", title="Broken", last_refreshed=_ago(days=13)
+    )
+    storage.add_feed(
+        "fine", "https://example.com/b.xml", title="Fine", last_refreshed=_ago(minutes=20)
+    )
+    client = _make_client(storage, FakeQueue(), enable_dashboard=True)
+
+    data = asyncio.run(
+        dashboard.gather(storage, client.app.state.settings)
+    )
+    by_id = {feed.feed_id: feed for feed in data.feeds}
+    assert by_id["broken"].unhealthy is True
+    assert by_id["broken"].status == "failing"
+    assert by_id["fine"].unhealthy is False
+    assert by_id["fine"].status == "ok"
+    assert data.failing_feeds == 1
+
+    # And it is actually rendered, not just computed.
+    body = client.get("/dashboard").text
+    assert "1</strong> failing to refresh" in body
+
+
+def test_dashboard_does_not_flag_paused_feeds():
+    # Stale-skipped: the sweep is deliberately leaving it alone, so an old
+    # lastrefreshed is expected rather than a fault.
+    storage = FakeStorage()
+    storage.add_feed(
+        "paused",
+        "https://example.com/a.xml",
+        title="Paused",
+        last_requested=_ago(days=120),
+        last_refreshed=_ago(days=120),
+    )
+    client = _make_client(storage, FakeQueue(), enable_dashboard=True)
+
+    data = asyncio.run(dashboard.gather(storage, client.app.state.settings))
+    assert data.feeds[0].unhealthy is False
+    assert data.feeds[0].status == "paused"
+    assert data.failing_feeds == 0
+
+
+def test_dashboard_falls_back_to_when_the_feed_was_last_written():
+    # A feed with no lastrefreshed metadata has never refreshed successfully
+    # since the field was introduced — so if it is also broken it would never
+    # get one, and reading "no timestamp" as "unknown, not broken" would hide it
+    # forever. _store_feed is the only writer of feed.xml, so the document's own
+    # write time says the same thing and is available for every feed.
+    storage = FakeStorage()
+    storage.add_feed(
+        "stuck", "https://example.com/a.xml", title="Stuck", written=_dt(days=13)
+    )
+    storage.add_feed(
+        "fresh", "https://example.com/b.xml", title="Fresh", written=_dt(minutes=5)
+    )
+    client = _make_client(storage, FakeQueue(), enable_dashboard=True)
+
+    data = asyncio.run(dashboard.gather(storage, client.app.state.settings))
+    by_id = {feed.feed_id: feed for feed in data.feeds}
+    assert by_id["stuck"].status == "failing"
+    assert by_id["stuck"].last_refreshed_display == "13d ago"
+    assert by_id["fresh"].status == "ok"
+    assert data.failing_feeds == 1
+
+
+def test_dashboard_prefers_metadata_over_write_time():
+    # The metadata is the real signal; the write time is only a stand-in. A
+    # feed refreshed recently must not be flagged because its object happens to
+    # carry an older mtime.
+    storage = FakeStorage()
+    storage.add_feed(
+        "ok",
+        "https://example.com/a.xml",
+        title="Fine",
+        last_refreshed=_ago(minutes=10),
+        written=_dt(days=400),
+    )
+    client = _make_client(storage, FakeQueue(), enable_dashboard=True)
+
+    data = asyncio.run(dashboard.gather(storage, client.app.state.settings))
+    assert data.feeds[0].unhealthy is False
+    assert data.feeds[0].last_refreshed_display == "10m ago"
+
+
+def test_dashboard_never_flags_when_auto_refresh_is_disabled():
+    # Nothing is expected to refresh the feed, so an old timestamp means nothing.
+    storage = FakeStorage()
+    storage.add_feed(
+        "old", "https://example.com/a.xml", title="Old", last_refreshed=_ago(days=400)
+    )
+    client = _make_client(
+        storage, FakeQueue(), enable_dashboard=True, auto_refresh_interval="0"
+    )
+
+    data = asyncio.run(dashboard.gather(storage, client.app.state.settings))
+    assert data.feeds[0].unhealthy is False
+    assert data.failing_feeds == 0
 
 
 def test_dashboard_add_enqueues_and_returns_partial(dashboard_fakes):
