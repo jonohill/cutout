@@ -30,7 +30,23 @@
              title="cutout feed URL — subscribe with this (right-click to copy)">{{ feed.display_title }}</a>
         </td>
         <td class="num">{{ feed.episode_count }}</td>
-        <td>{{ feed.delay or "—" }}</td>
+        <td>
+          <form method="post"
+                action="/dashboard/podcast/{{ feed.feed_id }}/delay"
+                hx-post="/dashboard/podcast/{{ feed.feed_id }}/delay"
+                hx-target="#feeds"
+                hx-swap="outerHTML"
+                hx-confirm="Change the delay for {{ feed.display_title }}? Episodes moving into the new window are dropped from the feed (and their audio removed, if cleanup is on); ones moving out are processed again.">
+            <input type="text"
+                   name="delay"
+                   class="delay"
+                   value="{{ feed.delay or '' }}"
+                   placeholder="—"
+                   title="Delay, e.g. 2d — empty for none"
+                   aria-label="Delay for {{ feed.display_title }}" />
+            <button type="submit" title="Save delay" aria-label="Save delay for {{ feed.display_title }}">&check;</button>
+          </form>
+        </td>
         <td>{{ feed.last_requested_display or "—" }}</td>
         <td>
           {% if feed.unhealthy %}

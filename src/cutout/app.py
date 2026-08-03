@@ -14,7 +14,7 @@ from . import dashboard, opml
 from .common import feed_path, parse_delay
 from .common.storage import S3Storage, Storage
 from .config import Settings, get_settings
-from .podcasts import delete_feed, enqueue_create
+from .podcasts import delete_feed, enqueue_create, enqueue_delay_change
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +151,32 @@ def create_app(
         logger.info("dashboard add: feed_id=%s url=%s", feed_id, payload.feed_url)
         return await _render_feeds(
             request, f"Queued {payload.feed_url} — appears once processed."
+        )
+
+    @app.post("/dashboard/podcast/{feed_id}/delay", response_class=HTMLResponse)
+    async def dashboard_set_delay(
+        feed_id: str, request: Request, delay: str = Form("")
+    ) -> Response:
+        if not request.app.state.settings.enable_dashboard:
+            return Response(status_code=404)
+        delay = delay.strip()
+        if delay:
+            try:
+                parse_delay(delay)
+            except ValueError:
+                return await _render_feeds(request, f"Invalid delay: {delay}")
+        # The worker would raise on an unknown feed_id, but that failure lands in
+        # its log long after this response — check here so the user sees it.
+        if await request.app.state.storage.head(feed_path(feed_id)) is None:
+            return await _render_feeds(request, f"Nothing to update for {feed_id}.")
+        await enqueue_delay_change(
+            request.app.state.queue, feed_id=feed_id, delay=delay
+        )
+        logger.info("dashboard delay: feed_id=%s delay=%r", feed_id, delay)
+        return await _render_feeds(
+            request,
+            f"Delay for {feed_id} {f'set to {delay}' if delay else 'cleared'} "
+            "— applies on the next refresh.",
         )
 
     @app.post("/dashboard/podcast/{feed_id}/delete", response_class=HTMLResponse)

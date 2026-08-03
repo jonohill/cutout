@@ -519,6 +519,40 @@ def test_resolve_uses_stored_metadata():
     assert resolved == (FEED_ID, SOURCE_URL, "Stored", "1w")
 
 
+def _run_process_over_stored(body, stored):
+    """Run ``process(body)`` against a feed that already has ``stored`` metadata."""
+    storage = FakeStorage()
+    storage.head_meta[feed_path(FEED_ID)] = stored
+
+    async def fetch(url):
+        return PROC_FEED, url
+
+    processor = FeedProcessor(
+        storage=storage, start_job=FakeQueue().put, settings=_settings(), fetch=fetch
+    )
+    asyncio.run(processor.process(body))
+    return storage.metas[feed_path(FEED_ID)]
+
+
+def test_delay_in_the_message_replaces_the_stored_one():
+    # How the dashboard's delay edit lands: a bare feed_id + delay message.
+    meta = _run_process_over_stored(
+        {"feed_id": FEED_ID, "delay": "2w"},
+        {"feedurl": SOURCE_URL, "title": "Stored", "delay": "1d"},
+    )
+    assert meta["delay"] == "2w"
+    # The rest of the feed's metadata still comes from storage.
+    assert meta["title"] == "Stored"
+
+
+def test_empty_delay_in_the_message_clears_the_stored_one():
+    meta = _run_process_over_stored(
+        {"feed_id": FEED_ID, "delay": ""},
+        {"feedurl": SOURCE_URL, "delay": "1d"},
+    )
+    assert "delay" not in meta
+
+
 def test_resolve_unknown_feed_raises():
     storage = FakeStorage()
     processor = FeedProcessor(

@@ -269,6 +269,10 @@ def test_dashboard_disabled_returns_404(fakes):
     assert client.get("/dashboard").status_code == 404
     assert client.post("/dashboard/podcast", data={"feed_url": "x"}).status_code == 404
     assert client.post("/dashboard/podcast/abc/delete").status_code == 404
+    assert (
+        client.post("/dashboard/podcast/abc/delay", data={"delay": "2d"}).status_code
+        == 404
+    )
     assert client.get("/dashboard/opml").status_code == 404
 
 
@@ -416,6 +420,46 @@ def test_dashboard_add_rejects_bad_input_without_enqueue(dashboard_fakes):
     resp = client.post("/dashboard/podcast", data={"feed_url": "not-a-url"})
     assert resp.status_code == 200
     assert "Invalid" in resp.text
+    assert queue.messages == []
+
+
+def test_dashboard_set_delay_enqueues_change(dashboard_fakes):
+    client, storage, queue = dashboard_fakes
+    storage.add_feed("abc", "https://example.com/a.xml", title="Show A", delay="1d")
+
+    resp = client.post("/dashboard/podcast/abc/delay", data={"delay": " 2w "})
+    assert resp.status_code == 200
+    assert 'id="feeds"' in resp.text
+    # No feed_url, so the worker resolves the rest from stored metadata.
+    assert queue.messages == [{"feed_id": "abc", "delay": "2w"}]
+
+
+def test_dashboard_set_delay_clears_with_an_empty_value(dashboard_fakes):
+    client, storage, queue = dashboard_fakes
+    storage.add_feed("abc", "https://example.com/a.xml", delay="1d")
+
+    resp = client.post("/dashboard/podcast/abc/delay", data={"delay": ""})
+    assert resp.status_code == 200
+    # The key is present but empty: the worker must not fall back to the stored
+    # "1d", it must drop the delay.
+    assert queue.messages == [{"feed_id": "abc", "delay": ""}]
+
+
+def test_dashboard_set_delay_rejects_bad_input_without_enqueue(dashboard_fakes):
+    client, storage, queue = dashboard_fakes
+    storage.add_feed("abc", "https://example.com/a.xml")
+
+    resp = client.post("/dashboard/podcast/abc/delay", data={"delay": "soon"})
+    assert resp.status_code == 200
+    assert "Invalid delay" in resp.text
+    assert queue.messages == []
+
+
+def test_dashboard_set_delay_on_unknown_feed_does_not_enqueue(dashboard_fakes):
+    client, _, queue = dashboard_fakes
+    resp = client.post("/dashboard/podcast/nope/delay", data={"delay": "2d"})
+    assert resp.status_code == 200
+    assert "Nothing to update" in resp.text
     assert queue.messages == []
 
 

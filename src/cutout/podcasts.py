@@ -72,6 +72,24 @@ async def enqueue_create(
     return feed_id
 
 
+async def enqueue_delay_change(
+    queue: asyncio.Queue, *, feed_id: str, delay: str
+) -> None:
+    """Queue a refresh that rewrites an existing feed's delay.
+
+    The message carries no ``feed_url``, so the worker resolves the rest of the
+    feed's metadata from storage and persists this delay on the refresh it
+    writes. An empty ``delay`` clears it — which is why this always sends the
+    key, even empty: omitting it (or sending ``None``) makes the worker fall
+    back to the stored value instead.
+
+    Not a user request, so no ``requested`` flag: changing a delay says nothing
+    about whether anyone is still listening, and shouldn't reset the feed's
+    staleness clock.
+    """
+    await queue.put({"feed_id": feed_id, "delay": delay})
+
+
 async def list_feed_ids(storage: Storage) -> list[str]:
     """Every stored podcast's feed_id, from its ``{feed_id}/feed.xml`` key."""
     suffix = "/feed.xml"
