@@ -1,5 +1,6 @@
 import asyncio
 
+import httpx
 import pytest
 
 from cutout.worker.chapters import ChaptersError, generate_chapters
@@ -152,3 +153,53 @@ def test_raises_on_a_malformed_timestamp():
 
     with pytest.raises(ChaptersError):
         asyncio.run(generate_chapters(SEGMENTS, url=URL, model="m", api_key="k", post=post))
+
+
+def _http_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", URL)
+    return httpx.HTTPStatusError(
+        f"{status}", request=request, response=httpx.Response(status, request=request)
+    )
+
+
+def test_falls_back_to_the_next_model_when_one_is_out_of_quota():
+    tried = []
+
+    async def post(url, headers, body):
+        tried.append(body["model"])
+        if body["model"] != "third":
+            raise _http_error(429 if body["model"] == "first" else 503)
+        return _reply('{"chapters":[]}')
+
+    asyncio.run(
+        generate_chapters(
+            SEGMENTS, url=URL, model=["first", "second", "third"], api_key="k", post=post
+        )
+    )
+
+    assert tried == ["first", "second", "third"]
+
+
+def test_raises_the_last_error_when_every_model_is_exhausted():
+    async def post(url, headers, body):
+        raise _http_error(429)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(
+            generate_chapters(SEGMENTS, url=URL, model=["a", "b"], api_key="k", post=post)
+        )
+
+
+def test_does_not_fall_back_on_an_error_the_next_model_would_repeat():
+    tried = []
+
+    async def post(url, headers, body):
+        tried.append(body["model"])
+        raise _http_error(400)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(
+            generate_chapters(SEGMENTS, url=URL, model=["a", "b"], api_key="k", post=post)
+        )
+
+    assert tried == ["a"]

@@ -18,15 +18,21 @@ response-parsing logic can be tested without the network.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+import logging
+from collections.abc import Awaitable, Callable, Sequence
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # The model is slow on a full episode transcript. We request a streamed reply,
 # so the read timeout bounds the gap between chunks (which stays small while the
 # model is emitting) rather than the whole generation — a non-streamed POST
 # would instead have to return the entire body inside one read window.
 _TIMEOUT = httpx.Timeout(30.0, read=300.0)
+
+# Statuses that mean "this model can't serve the request right now"
+_FALLBACK_STATUSES = frozenset({429, 503})
 
 DEFAULT_LANGUAGE = "NZ English"
 
@@ -203,6 +209,15 @@ async def _post_chat_completion(url: str, headers: dict, body: dict) -> dict:
         async with client.stream("POST", url, headers=headers, json=body) as resp:
             if resp.is_error:
                 await resp.aread()
+                # HTTPStatusError renders only the status line, but the body is
+                # where the provider says *which* quota it was and how long to
+                # wait, so log it before discarding the response.
+                logger.warning(
+                    "chapters: %s %s: %s",
+                    resp.status_code,
+                    body.get("model"),
+                    resp.text[:500],
+                )
                 resp.raise_for_status()
             if "text/event-stream" not in resp.headers.get("content-type", ""):
                 await resp.aread()
@@ -231,7 +246,7 @@ async def generate_chapters(
     segments: list[dict],
     *,
     url: str,
-    model: str,
+    model: str | Sequence[str],
     api_key: str | None = None,
     language: str = DEFAULT_LANGUAGE,
     context: dict | None = None,
@@ -248,7 +263,15 @@ async def generate_chapters(
     ``context`` is optional publisher metadata (``podcast``/``title``/
     ``description``); when given it is rendered as a reference-only block before
     the transcript to steer name spellings, never as a chapter source.
+
+    ``model`` may be a list, tried in order: one that is out of quota or
+    overloaded (see ``_FALLBACK_STATUSES``) hands off to the next, and the last
+    one's error propagates so the job fails as it would with a single model.
     """
+    models = [model] if isinstance(model, str) else list(model)
+    if not models:
+        raise ChaptersError("no chapter model configured")
+
     prompt = (
         build_prompt(language)
         + "\n"
@@ -256,13 +279,26 @@ async def generate_chapters(
         + format_segments(segments)
     )
     body = {
-        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "response_format": response_format(),
     }
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
-    data = await post(url, headers, body)
+    for index, name in enumerate(models):
+        try:
+            data = await post(url, headers, {"model": name, **body})
+            break
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status not in _FALLBACK_STATUSES or index == len(models) - 1:
+                raise
+            logger.warning(
+                "chapters: %s unavailable (%d), trying %s",
+                name,
+                status,
+                models[index + 1],
+            )
+
     content = _extract_content(data)
     try:
         payload = json.loads(content)

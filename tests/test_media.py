@@ -207,7 +207,7 @@ def test_chapters_feeds_transcript_segments_to_the_model_and_stores_the_result(t
     # model and key.
     assert seen["segments"] == transcript["segments"]
     assert seen["url"] == "https://g.example/openai/chat/completions"
-    assert seen["model"] == "gemini-x"
+    assert seen["model"] == ["gemini-x"]
     assert seen["api_key"] == "key"
     # Stored the chapter list verbatim for the encode stage, recorded as done.
     assert json.loads((tmp_path / CHAPTERS_KEY).read_bytes()) == chapters

@@ -105,9 +105,16 @@ class Settings(BaseSettings):
         "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     )
     chapters_api_key: str | None = None
-    chapters_model: str = "gemini-3-flash-preview"
+    # One model, or several comma-separated and tried in order when one is out
+    # of quota or overloaded. Gemini counts its free-tier request quota per
+    # model, so listing several multiplies the daily allowance.
+    chapters_model: str = "gemini-3.7-flash"
     # Language the chapter descriptions are written in.
     chapters_language: str = "NZ English"
+
+    @property
+    def chapters_models(self) -> list[str]:
+        return [name.strip() for name in self.chapters_model.split(",") if name.strip()]
 
     # Optional AAC bitrate (kbps) for the output.
     # Leave unset for a high-quality VBR default; set it (e.g. 64) to pin a

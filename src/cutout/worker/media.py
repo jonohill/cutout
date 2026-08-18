@@ -173,7 +173,7 @@ class MediaWorker:
         chapters = await self._generate_chapters(
             segments,
             url=settings.chapters_url,
-            model=settings.chapters_model,
+            model=settings.chapters_models,
             api_key=settings.chapters_api_key,
             language=settings.chapters_language,
             context=job.get("context"),
