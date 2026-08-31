@@ -407,12 +407,24 @@ def test_dashboard_add_enqueues_and_returns_partial(dashboard_fakes):
     resp = client.post(
         "/dashboard/podcast",
         data={"feed_url": "https://example.com/new.xml", "delay": "2d"},
+        headers={"HX-Request": "true"},
     )
     assert resp.status_code == 200
-    # HTMX swaps the #feeds partial back in.
+    # HTMX swaps the #feeds partial back in, not a whole document.
     assert 'id="feeds"' in resp.text
+    assert "<html" not in resp.text
     assert queue.messages[0]["feed_url"] == "https://example.com/new.xml"
     assert queue.messages[0]["delay"] == "2d"
+
+
+def test_dashboard_add_without_htmx_returns_full_page(dashboard_fakes):
+    client, _, queue = dashboard_fakes
+    resp = client.post(
+        "/dashboard/podcast", data={"feed_url": "https://example.com/new.xml"}
+    )
+    assert resp.status_code == 200
+    assert "<html" in resp.text
+    assert queue.messages[0]["feed_url"] == "https://example.com/new.xml"
 
 
 def test_dashboard_add_rejects_bad_input_without_enqueue(dashboard_fakes):

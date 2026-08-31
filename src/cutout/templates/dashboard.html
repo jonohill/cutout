@@ -6,7 +6,7 @@
         <title>cutout dashboard</title>
         <script
             src="https://cdnjs.cloudflare.com/ajax/libs/htmx/2.0.10/htmx.min.js"
-            integrity="sha512-mwXO+qVbheglD8l/LGeVBnqcKl9NtchGWmM9gW/gvAEZBYnsBQCpaneQ+hI+MOlv7Komhd1NqZ5Gv1ElbYgqCA=="
+            integrity="sha512-5l65kMjGvrm7EATevCK/SFdMUfIUQfAsQLZY57t7tmsPf5ZtjrzU8wzSBykpRDhqnMwlKISCrxQTURFULsXdpQ=="
             crossorigin="anonymous"
             referrerpolicy="no-referrer"
         ></script>
@@ -113,6 +113,8 @@
         <section>
             <h2>Add a podcast</h2>
             <form
+                method="post"
+                action="/dashboard/podcast"
                 hx-post="/dashboard/podcast"
                 hx-target="#feeds"
                 hx-swap="outerHTML"
@@ -141,6 +143,9 @@
         <section>
             <h2>OPML</h2>
             <form
+                method="post"
+                action="/dashboard/opml"
+                enctype="multipart/form-data"
                 hx-post="/dashboard/opml"
                 hx-encoding="multipart/form-data"
                 hx-target="#feeds"

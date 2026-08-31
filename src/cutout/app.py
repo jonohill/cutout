@@ -107,12 +107,20 @@ def create_app(
         return Response(status_code=202)
 
     async def _render_feeds(request: Request, notice: str | None) -> Response:
-        """Render the #feeds partial that every dashboard mutation swaps in."""
+        """Render the result of a dashboard mutation.
+
+        htmx swaps in the #feeds partial. A plain form post, which is what the
+        browser sends when htmx failed to load, gets the whole page back so the
+        dashboard still works without JavaScript.
+        """
         data = await dashboard.gather(
             request.app.state.storage, request.app.state.settings
         )
+        template = (
+            "_feeds.html" if request.headers.get("HX-Request") else "dashboard.html"
+        )
         return _TEMPLATES.TemplateResponse(
-            request, "_feeds.html", {"data": data, "notice": notice}
+            request, template, {"data": data, "notice": notice}
         )
 
     @app.get("/dashboard", response_class=HTMLResponse)
