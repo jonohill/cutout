@@ -23,13 +23,27 @@ _DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, read=300.0)
 _TRANSCRIBE_TIMEOUT = httpx.Timeout(30.0, read=7200.0)
 
 
+_PERMANENT_REDIRECTS = {301, 308}
+
+
+def _permanent_url(resp: httpx.Response) -> str:
+    """The requested URL advanced over the leading run of permanent redirects."""
+    chain = [*resp.history, resp]
+    url = str(chain[0].url)
+    for hop, target in zip(resp.history, chain[1:]):
+        if hop.status_code not in _PERMANENT_REDIRECTS:
+            break
+        url = str(target.url)
+    return url
+
+
 async def fetch_text(url: str) -> tuple[str, str]:
-    """Fetch ``url`` as text. Returns ``(body, final_url)`` where ``final_url``
-    reflects any HTTP redirects followed."""
+    """Fetch ``url`` as text. Returns ``(body, source_url)`` where ``source_url``
+    reflects any permanent HTTP redirects followed."""
     async with httpx.AsyncClient(follow_redirects=True, timeout=_TIMEOUT) as client:
         resp = await client.get(url)
         resp.raise_for_status()
-        return resp.text, str(resp.url)
+        return resp.text, _permanent_url(resp)
 
 
 async def ping_overcast(ping_url: str, feed_url: str) -> None:

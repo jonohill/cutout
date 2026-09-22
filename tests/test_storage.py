@@ -19,6 +19,18 @@ def test_decode_metadata_value_unwraps_rfc2047_encoded_word():
     assert _decode_metadata_value("=?utf-8?Q?Caf=C3=A9?=") == "Café"
 
 
+def test_decode_metadata_value_keeps_an_unencoded_tail_flush():
+    # R2 encodes only a prefix of a long value. Joining the raw tail with a
+    # space would leave a %20 in the feed URL that grows on every refresh.
+    encoded = (
+        "=?utf-8?Q?https=3A=2F=2F?= =?utf-8?Q?cdn=2Eatp=2E?= "
+        "=?utf-8?Q?fm=2Frss=2Fp?= =?utf-8?Q?ublic=3Fr3?=zros1m"
+    )
+    assert _decode_metadata_value(encoded) == (
+        "https://cdn.atp.fm/rss/public?r3zros1m"
+    )
+
+
 def test_decode_metadata_value_passes_plain_ascii_through():
     assert _decode_metadata_value("https://plain.example.com/feed") == (
         "https://plain.example.com/feed"

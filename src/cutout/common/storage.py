@@ -4,7 +4,7 @@ import os
 import shutil
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timezone
-from email.header import decode_header, make_header
+from email.header import decode_header
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import BinaryIO, Protocol, runtime_checkable
@@ -23,17 +23,29 @@ _MISSING_CODES = {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}
 def _decode_metadata_value(value: str) -> str:
     """Decode an RFC 2047 ``encoded-word`` metadata value back to plain text.
 
-    R2 stores any user-metadata value containing non-US-ASCII bytes as an
-    ``encoded-word`` (``=?utf-8?Q?...?=``) and returns it still encoded on
-    ``head_object``. Plain-ASCII values are unaffected, so this is a no-op for
-    them and only unwraps the ones R2 mangled.
+    R2 stores any user-metadata value it considers unsafe for a header (a URL
+    query string is enough) as ``encoded-word`` (``=?utf-8?Q?...?=``) and
+    returns it still encoded on ``head_object``.
     """
     if "=?" not in value:
         return value
     try:
-        return str(make_header(decode_header(value)))
+        parts = decode_header(value)
     except (ValueError, LookupError):
         return value
+    # R2 encodes only a prefix of a long value. ``make_header`` would join the
+    # raw tail to the last encoded-word with a space, which reaches the stored
+    # feed URL as %20 and grows it on every refresh.
+    decoded: list[str] = []
+    for text, charset in parts:
+        if isinstance(text, bytes):
+            try:
+                decoded.append(text.decode(charset or "ascii"))
+            except (LookupError, UnicodeDecodeError):
+                return value
+        else:
+            decoded.append(text)
+    return "".join(decoded)
 
 
 @runtime_checkable
