@@ -15,7 +15,7 @@ RUN curl -fsSL "https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v${FDK_AAC
     && make -j"$(nproc)" \
     && make install
 
-ARG FFMPEG_VERSION=7.1
+ARG FFMPEG_VERSION=7.1.5
 RUN curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
         | tar xJ \
     && cd "ffmpeg-${FFMPEG_VERSION}" \
