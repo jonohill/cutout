@@ -3,17 +3,13 @@
   "extends": [
     "config:recommended"
   ],
-  "enabledManagers": [
-    "dockerfile",
-    "custom.regex"
-  ],
   "minimumReleaseAge": "2 weeks",
   "internalChecksFilter": "strict",
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Bump FFmpeg built from source in cutout/Dockerfile",
-      "fileMatch": ["(^|/)cutout/Dockerfile$"],
+      "description": "Bump FFmpeg built from source in Dockerfile",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
       "matchStrings": ["ARG FFMPEG_VERSION=(?<currentValue>\\S+)"],
       "depNameTemplate": "FFmpeg/FFmpeg",
       "datasourceTemplate": "github-tags",
@@ -21,8 +17,8 @@
     },
     {
       "customType": "regex",
-      "description": "Bump fdk-aac built from source in cutout/Dockerfile",
-      "fileMatch": ["(^|/)cutout/Dockerfile$"],
+      "description": "Bump fdk-aac built from source in Dockerfile",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
       "matchStrings": ["ARG FDK_AAC_VERSION=(?<currentValue>\\S+)"],
       "depNameTemplate": "mstorsjo/fdk-aac",
       "datasourceTemplate": "github-tags",
