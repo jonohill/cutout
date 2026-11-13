@@ -39,7 +39,7 @@ services:
       # Needs a pretty decent LLM - small models tend not to adhere to output shape and/or hallucinate timestamps
       CHAPTERS_URL: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
       CHAPTERS_API_KEY: ${GEMINI_API_KEY}
-      CHAPTERS_MODEL: gemini-3.5-flash
+      CHAPTERS_MODEL: gemini-4-hydrogen
       # Language for the generated chapter descriptions (default: NZ English)
       CHAPTERS_LANGUAGE: NZ English
       # Local sidecar, consider e.g. R2 for a prod setup
