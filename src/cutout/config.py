@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     # One model, or several comma-separated and tried in order when one is out
     # of quota or overloaded. Gemini counts its free-tier request quota per
     # model, so listing several multiplies the daily allowance.
-    chapters_model: str = "gemini-3.7-flash"
+    chapters_model: str = "gemini-4-hydrogen"
     # Language the chapter descriptions are written in.
     chapters_language: str = "NZ English"
 
