@@ -6,7 +6,7 @@ RUN apt-get update \
         libopus-dev nasm pkg-config yasm zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-ARG FDK_AAC_VERSION=2.0.3
+ARG FDK_AAC_VERSION=3.0.0
 RUN curl -fsSL "https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v${FDK_AAC_VERSION}.tar.gz" \
         | tar xz \
     && cd "fdk-aac-${FDK_AAC_VERSION}" \
