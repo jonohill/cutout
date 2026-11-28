@@ -49,7 +49,7 @@ Transcriber = Callable[..., Awaitable[dict]]
 ChapterMaker = Callable[..., Awaitable[list[dict]]]
 
 # Cut the ad chapters out of a source and write the encoded M4A (src, dst,
-# chapters, bitrate_kbps); injectable so tests don't shell out to ffmpeg.
+# chapters, bitrate_kbps, codec); injectable so tests don't shell out to ffmpeg.
 CutAudio = Callable[..., Awaitable[None]]
 
 # Aim the re-encode a little under the hard cap. The compressor already models
@@ -216,6 +216,7 @@ class MediaWorker:
             dst,
             chapters,
             bitrate_kbps=self._settings.encode_bitrate_kbps,
+            codec=self._settings.encode_codec,
         )
         logger.info("encode: stored %s", dst)
 

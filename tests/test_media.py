@@ -228,8 +228,10 @@ def test_encode_cuts_source_using_chapters_and_records_done(tmp_path):
 
     captured = {}
 
-    async def cut_audio(src, dst, chapters, *, bitrate_kbps):
-        captured.update(src=src, dst=dst, chapters=chapters, bitrate_kbps=bitrate_kbps)
+    async def cut_audio(src, dst, chapters, *, bitrate_kbps, codec):
+        captured.update(
+            src=src, dst=dst, chapters=chapters, bitrate_kbps=bitrate_kbps, codec=codec
+        )
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(b"m4a")  # stand in for the encoded output
 
@@ -241,34 +243,38 @@ def test_encode_cuts_source_using_chapters_and_records_done(tmp_path):
     assert captured["dst"] == tmp_path / ENCODED_KEY
     assert captured["chapters"] == CHAPTERS
     assert captured["bitrate_kbps"] is None
+    assert captured["codec"] == "aac"
     assert asyncio.run(work.head(ENCODED_KEY)) == {}
 
 
-def test_encode_forwards_configured_bitrate(tmp_path):
+def test_encode_forwards_configured_bitrate_and_codec(tmp_path):
     work = LocalStorage(tmp_path)
     _write_source(tmp_path, b"audio")
     _write_chapters(tmp_path, CHAPTERS)
 
     captured = {}
 
-    async def cut_audio(src, dst, chapters, *, bitrate_kbps):
-        captured["bitrate_kbps"] = bitrate_kbps
+    async def cut_audio(src, dst, chapters, *, bitrate_kbps, codec):
+        captured.update(bitrate_kbps=bitrate_kbps, codec=codec)
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(b"m4a")
 
     worker = _worker(
-        work, settings=_settings(encode_bitrate_kbps=64), cut_audio=cut_audio
+        work,
+        settings=_settings(encode_bitrate_kbps=64, encode_codec="xhe-aac"),
+        cut_audio=cut_audio,
     )
     asyncio.run(worker.encode(JOB))
 
     assert captured["bitrate_kbps"] == 64
+    assert captured["codec"] == "xhe-aac"
 
 
 def test_encode_raises_when_chapters_missing(tmp_path):
     work = LocalStorage(tmp_path)
     _write_source(tmp_path, b"audio")
 
-    async def cut_audio(src, dst, chapters, *, bitrate_kbps):
+    async def cut_audio(src, dst, chapters, *, bitrate_kbps, codec):
         raise AssertionError("must not encode without a chapter list")
 
     with pytest.raises(FileNotFoundError):

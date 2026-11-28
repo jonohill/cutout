@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -117,9 +118,14 @@ class Settings(BaseSettings):
         return [name.strip() for name in self.chapters_model.split(",") if name.strip()]
 
     # Optional AAC bitrate (kbps) for the output.
-    # Leave unset for a high-quality VBR default; set it (e.g. 64) to pin a
-    # specific bitrate.
+    # Leave unset for a high-quality VBR default (xhe-aac: 24 mono, 32 stereo);
+    # set it (e.g. 64) to pin a specific bitrate.
     encode_bitrate_kbps: int | None = Field(default=None, ge=8)
+
+    # Output codec. "xhe-aac" needs an ffmpeg built with libfdk_xhe_aac and
+    # clients that can play xHE-AAC (Apple Podcasts on iOS/macOS 18+, Android
+    # 9+); older players can't decode it.
+    encode_codec: Literal["aac", "xhe-aac"] = "aac"
 
     @property
     def transcribe_max_bytes(self) -> int:

@@ -2,27 +2,34 @@ FROM debian:bookworm-slim AS ffmpeg-build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        autoconf automake build-essential ca-certificates curl libtool \
-        libopus-dev nasm pkg-config yasm zlib1g-dev \
+        build-essential ca-certificates cmake curl \
+        libopus-dev nasm pkg-config zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-ARG FDK_AAC_VERSION=2.0.3
-RUN curl -fsSL "https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v${FDK_AAC_VERSION}.tar.gz" \
-        | tar xz \
-    && cd "fdk-aac-${FDK_AAC_VERSION}" \
-    && ./autogen.sh \
-    && ./configure --prefix=/usr/local --disable-shared --enable-static \
-    && make -j"$(nproc)" \
-    && make install
+# The xhe-aac branch builds both libfdk_aac and libfdk_xhe_aac. Pinned to
+# commits because neither project has a release with the xHE-AAC encoder yet.
+ARG FDK_AAC_REF=e309c3faf439cf9adb9a9d60254b77e8961da16f
+RUN mkdir fdk-aac \
+    && curl -fsSL "https://github.com/mstorsjo/fdk-aac/archive/${FDK_AAC_REF}.tar.gz" \
+        | tar xz --strip-components=1 -C fdk-aac \
+    && cmake -S fdk-aac -B fdk-aac/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_SHARED_LIBS=OFF \
+    && cmake --build fdk-aac/build -j"$(nproc)" \
+    && cmake --install fdk-aac/build
 
-ARG FFMPEG_VERSION=7.1
-RUN curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
-        | tar xJ \
-    && cd "ffmpeg-${FFMPEG_VERSION}" \
+ARG FFMPEG_REF=73de9781b6319e0051249b73e7d9b4c09451edf2
+RUN mkdir ffmpeg \
+    && curl -fsSL "https://github.com/FFmpeg/FFmpeg/archive/${FFMPEG_REF}.tar.gz" \
+        | tar xz --strip-components=1 -C ffmpeg \
+    && cd ffmpeg \
     && PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ./configure \
         --prefix=/usr/local \
+        --pkg-config-flags=--static \
         --enable-nonfree \
         --enable-libfdk-aac \
+        --enable-libfdk-xhe-aac \
         --enable-libopus \
         --extra-ldflags="-static-libstdc++ -static-libgcc" \
         --disable-debug \

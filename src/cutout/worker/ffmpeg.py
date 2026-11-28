@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+from typing import Literal
 
 from .edit import plan_cuts
 
@@ -41,8 +42,15 @@ _MAX_OUTPUT_SAMPLE_RATE = 32_000
 _DEFAULT_FDK_VBR = 3
 _DEFAULT_NATIVE_AAC_QSCALE = 1.2
 
-# Resolved once: the highest-quality AAC encoder this ffmpeg build offers.
-_aac_encoder_cache: str | None = None
+Codec = Literal["aac", "xhe-aac"]
+
+_XHE_ENCODER = "libfdk_xhe_aac"
+# libfdk_xhe_aac rejects every other rate.
+_XHE_SAMPLE_RATES = (48_000, 44_100)
+# Lowest rates that sound acceptable for speech.
+_DEFAULT_XHE_KBPS = {1: 24, 2: 32}
+
+_encoders_cache: bytes | None = None
 
 
 class FfmpegError(RuntimeError):
@@ -127,32 +135,48 @@ async def compress_audio(src: Path, dst: Path, target_bytes: int) -> None:
     )
 
 
-async def _aac_encoder() -> str:
-    """The AAC encoder to use: ``libfdk_aac`` if this build has it, else the
-    native ``aac``. Probed once (``ffmpeg -encoders``) and cached."""
-    global _aac_encoder_cache
-    if _aac_encoder_cache is None:
-        out = await _run("ffmpeg", "-hide_banner", "-encoders")
-        _aac_encoder_cache = "libfdk_aac" if b"libfdk_aac" in out else "aac"
-        logger.info("encode: using AAC encoder %s", _aac_encoder_cache)
-    return _aac_encoder_cache
+async def _encoders() -> bytes:
+    global _encoders_cache
+    if _encoders_cache is None:
+        _encoders_cache = await _run("ffmpeg", "-hide_banner", "-encoders")
+    return _encoders_cache
 
 
-def _aac_quality_args(encoder: str, bitrate_kbps: int | None) -> list[str]:
+async def _aac_encoder(codec: Codec) -> str:
+    """The ffmpeg encoder for ``codec``.
+
+    For ``aac``: ``libfdk_aac`` if this build has it, else the native ``aac``.
+    For ``xhe-aac``: ``libfdk_xhe_aac``, raising ``FfmpegError`` if the build
+    lacks it rather than silently publishing plain AAC.
+    """
+    out = await _encoders()
+    if codec == "xhe-aac":
+        if _XHE_ENCODER.encode() not in out:
+            raise FfmpegError(f"xhe-aac requested but ffmpeg has no {_XHE_ENCODER}")
+        return _XHE_ENCODER
+    return "libfdk_aac" if b"libfdk_aac" in out else "aac"
+
+
+def _aac_quality_args(
+    encoder: str, bitrate_kbps: int | None, channels: int
+) -> list[str]:
     """The encoder args selecting the target quality.
 
-    A configured bitrate pins the output to that (ABR) target; otherwise we ask
-    for VBR at a high-quality default (libfdk's VBR, or the native encoder's
-    quality scale as a fallback)."""
+    A configured bitrate pins the output to that target. Otherwise AAC uses VBR
+    at a high-quality default (libfdk's VBR, or the native encoder's quality
+    scale as a fallback) and xHE-AAC uses a per-channel-count bitrate."""
     if bitrate_kbps is not None:
         return ["-b:a", f"{bitrate_kbps}k"]
+    if encoder == _XHE_ENCODER:
+        return ["-b:a", f"{_DEFAULT_XHE_KBPS[min(max(channels, 1), 2)]}k"]
     if encoder == "libfdk_aac":
         return ["-vbr", str(_DEFAULT_FDK_VBR)]
     return ["-q:a", str(_DEFAULT_NATIVE_AAC_QSCALE)]
 
 
-async def _probe_sample_rate(path: Path) -> int:
-    """Return ``path``'s first audio stream's sample rate, via ffprobe."""
+async def _probe_audio(path: Path) -> tuple[int | None, int | None]:
+    """Return ``path``'s first audio stream's (sample rate, channel count), via
+    ffprobe. Either is ``None`` when ffprobe doesn't report it."""
     out = await _run(
         "ffprobe",
         "-v",
@@ -160,17 +184,33 @@ async def _probe_sample_rate(path: Path) -> int:
         "-select_streams",
         "a:0",
         "-show_entries",
-        "stream=sample_rate",
+        "stream=sample_rate,channels",
         "-of",
-        "default=noprint_wrappers=1:nokey=1",
+        "default=noprint_wrappers=1",
         str(path),
     )
-    text = out.decode().strip().splitlines()
-    try:
-        return int(text[0])
-    except (IndexError, ValueError):
-        # Unknown rate: fall back to the cap so we never blindly upsample.
-        return _MAX_OUTPUT_SAMPLE_RATE
+    fields = dict(
+        line.split("=", 1) for line in out.decode().splitlines() if "=" in line
+    )
+
+    def as_int(key: str) -> int | None:
+        try:
+            return int(fields[key])
+        except (KeyError, ValueError):
+            return None
+
+    return as_int("sample_rate"), as_int("channels")
+
+
+def _output_sample_rate(encoder: str, source_rate: int | None) -> int:
+    if encoder == _XHE_ENCODER:
+        # USAC resamples internally to its core rate, so the AAC cap would only
+        # be rejected.
+        if source_rate is None or source_rate >= _XHE_SAMPLE_RATES[0]:
+            return _XHE_SAMPLE_RATES[0]
+        return _XHE_SAMPLE_RATES[1]
+    # Unknown rate: use the cap so we never blindly upsample.
+    return min(source_rate or _MAX_OUTPUT_SAMPLE_RATE, _MAX_OUTPUT_SAMPLE_RATE)
 
 
 async def _probe_has_cover(path: Path) -> bool:
@@ -254,6 +294,7 @@ async def cut_audio(
     chapters: list[dict],
     *,
     bitrate_kbps: int | None = None,
+    codec: Codec = "aac",
 ) -> None:
     """Cut the ad chapters out of ``src`` and write the result to ``dst`` as an
     M4A — re-encoded to AAC, with a chapter track and the source's metadata and
@@ -266,23 +307,30 @@ async def cut_audio(
     is downsampled to <=32 kHz; ``bitrate_kbps`` pins the AAC target when given,
     otherwise a high-quality VBR default is used.
 
+    ``codec="xhe-aac"`` encodes xHE-AAC at 44.1 or 48 kHz in two passes. The
+    first measures loudness so the output carries accurate loudness metadata
+    for client-side normalisation.
+
     Raises ``NoKeptChaptersError`` (from ``plan_cuts``) if every chapter is a
     long-enough ad to cut.
     """
     duration = await probe_duration(src)
     plan = plan_cuts(chapters, duration)
-    sample_rate = min(await _probe_sample_rate(src), _MAX_OUTPUT_SAMPLE_RATE)
+    source_rate, channels = await _probe_audio(src)
     has_cover = await _probe_has_cover(src)
-    encoder = await _aac_encoder()
+    encoder = await _aac_encoder(codec)
+    sample_rate = _output_sample_rate(encoder, source_rate)
+    two_pass = encoder == _XHE_ENCODER
 
     logger.info(
-        "encode: %s -> %s (keeping %d of %d chapter(s), %d Hz, %s)",
+        "encode: %s -> %s (keeping %d of %d chapter(s), %d Hz, %s%s)",
         src,
         dst,
         len(plan.chapters),
         len(chapters),
         sample_rate,
         encoder,
+        ", two-pass" if two_pass else "",
     )
 
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -291,6 +339,37 @@ async def cut_audio(
     # sees a half-written ``encoded`` artifact.
     tmp = dst.with_name(dst.name + ".m4a")
     meta = dst.with_name(dst.name + ".ffmeta")
+    # ffmpeg appends "-<output stream index>.log". The audio is mapped first,
+    # so the log is always "-0.log".
+    passlog = dst.with_name(dst.name + ".pass")
+
+    audio_args = [
+        "-c:a",
+        encoder,
+        *_aac_quality_args(encoder, bitrate_kbps, channels or 1),
+        "-ar",
+        str(sample_rate),
+    ]
+    filtergraph = _build_filtergraph(plan.segments)
+    pass1 = [
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(src),
+        "-filter_complex",
+        filtergraph,
+        "-map",
+        "[aout]",
+        *audio_args,
+        "-pass",
+        "1",
+        "-passlogfile",
+        str(passlog),
+        "-f",
+        "null",
+        "-",
+    ]
 
     args = [
         "ffmpeg",
@@ -301,7 +380,7 @@ async def cut_audio(
         "-i",
         str(meta),
         "-filter_complex",
-        _build_filtergraph(plan.segments),
+        filtergraph,
         "-map",
         "[aout]",
     ]
@@ -313,19 +392,18 @@ async def cut_audio(
         "0",  # title/artist/album/... from the source
         "-map_chapters",
         "1",  # chapters from the ffmetadata input
-        "-c:a",
-        encoder,
-        *_aac_quality_args(encoder, bitrate_kbps),
-        "-ar",
-        str(sample_rate),
-        "-movflags",
-        "+faststart",
-        str(tmp),
+        *audio_args,
     ]
+    if two_pass:
+        args += ["-pass", "2", "-passlogfile", str(passlog)]
+    args += ["-movflags", "+faststart", str(tmp)]
     try:
         meta.write_text(_ffmetadata(plan.chapters), encoding="utf-8")
+        if two_pass:
+            await _run(*pass1)
         await _run(*args)
         os.replace(tmp, dst)
     finally:
         meta.unlink(missing_ok=True)
         tmp.unlink(missing_ok=True)
+        passlog.with_name(passlog.name + "-0.log").unlink(missing_ok=True)
